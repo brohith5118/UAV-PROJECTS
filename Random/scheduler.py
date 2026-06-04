@@ -1,0 +1,83 @@
+import math
+
+from config import ENERGY_PER_METER, UAV_SPEED
+
+def curr_distance(uav, task):
+    return math.hypot(uav.x - task.x, uav.y - task.y)
+
+def is_feasible(uav, task):
+    if not uav.active:
+        return False
+    if uav.curr_energy < task.energy_cost:
+        return False
+    if uav.curr_hover < task.hover_time:
+        return False
+    if uav.curr_compute < task.compute_cost:
+        return False
+    return True
+
+def is_feasible_with_travel(uav, task, runtime):
+    if not uav.active:
+        return False
+    travel_dist = curr_distance(uav, task)
+    travel_energy_cost = travel_dist * ENERGY_PER_METER
+    travel_hover_time = travel_dist / UAV_SPEED
+    if(runtime + travel_hover_time + task.hover_time > task.deadline):
+        return False
+    if uav.curr_energy < task.energy_cost + travel_energy_cost:
+        return False
+    if uav.curr_hover < task.hover_time + travel_hover_time:
+        return False
+    if uav.curr_compute < task.compute_cost:
+        return False
+    return True
+
+def assign_tasks(tasks, uavs):
+    tasklist = list(tasks)
+    for task in tasks:
+        best_uav = None
+        nearest_dist = float('inf')
+        for uav in uavs:
+            if(curr_distance(uav,task) < nearest_dist):
+                best_uav = uav
+                nearest_dist = curr_distance(uav,task)
+        if best_uav and is_feasible(best_uav,task):
+            best_uav.assign(task)
+            best_uav.compute_resource(task)
+            tasklist.remove(task)
+
+    return tasklist
+
+def establish_path(tasks,uavs):
+    for uav in uavs:
+        task_list = []
+        for i in range(len(uav.assigned_tasks)):
+            nearest_task = None
+            nearest_dist = float('inf')
+            for task in uav.assigned_tasks:
+                if(curr_distance(uav,task) < nearest_dist):
+                    nearest_task = task
+                    nearest_dist = curr_distance(uav,task)
+            task_list.append(nearest_task)
+            uav.assigned_tasks.remove(nearest_task)
+            uav.move_to(nearest_task)
+        
+        uav.assigned_tasks = task_list
+
+        uav.assigned_tasks.sort(
+            key=lambda task: task.priority,
+            reverse=True
+        )
+
+def run_path(uavs):
+    for uav in uavs:
+        uav.reset_position()
+        uav.reset_resource()
+        runtime = 0
+        for task in uav.assigned_tasks:
+            if is_feasible_with_travel(uav, task,runtime):
+                uav.compute_resource_with_travel(task)
+                runtime += task.hover_time + curr_distance(uav, task) / UAV_SPEED
+                task.completed = True
+            else:
+                task.completed = False
