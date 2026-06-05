@@ -9,12 +9,19 @@ import os
 import random
 import numpy as np
 
+ROOT_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..")
+)
+
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
 # Add parent directory to path so we can import root modules
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-from environment import generate_demand_map, generate_tasks, generate_uavs, generate_new_task
+from common.environment import generate_demand_map, generate_tasks, generate_uavs, generate_new_task
 from scheduler import assign_tasks
 from utils import print_mission_metrics
 from visualization import plot_all, plot_reward_convergence
@@ -37,8 +44,8 @@ from pr_module import (
 from rl_agent import run_tsa_for_fleet, QLearningTrajectoryPlanner
 
 
-SEED = 1
-UAV_SEED = 1
+SEED = 42
+UAV_SEED = 99
 random.seed(SEED)
 np.random.seed(SEED)
 

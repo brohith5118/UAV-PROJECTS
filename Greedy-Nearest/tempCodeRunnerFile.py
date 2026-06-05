@@ -1,4 +1,14 @@
-from environment import generate_demand_map,generate_tasks,generate_uavs
+import os
+import sys
+
+ROOT_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..")
+)
+
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
+from common.environment import generate_demand_map,generate_tasks,generate_uavs
 from visualization import plot_demand_map, plot_uavs
 from scheduler import assign_tasks, establish_path, run_path
 

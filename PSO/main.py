@@ -1,9 +1,23 @@
+import os
+import sys
+
+ROOT_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..")
+)
+
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
 import copy
 
-from environment import generate_demand_map, generate_tasks, generate_uavs
-from scheduler import DMMPPRTSAScheduler, PSOScheduler
+from common.environment import generate_demand_map, generate_tasks, generate_uavs
+from scheduler import PSOScheduler
 from visualization import save_all_graphs
 
+from config import (
+    SEED,
+    UAV_SEED,
+)
 
 PRIORITY_NAMES = {
     1: "Low/Routine",
@@ -160,60 +174,29 @@ def print_routes(result):
         print(f"\nUnassigned: {ids}")
 
 
-def _clone_scenario(tasks, uavs):
-    return copy.deepcopy(tasks), copy.deepcopy(uavs)
-
-
-def print_comparison(results, total_tasks):
-    print("\nAlgorithm comparison")
-    print("=" * 72)
-    print(
-        f"{'Algorithm':18s} {'assigned':>9s} {'on-time':>9s} "
-        f"{'late':>7s} {'unassigned':>11s} {'distance(m)':>13s} {'makespan(s)':>12s}"
-    )
-    for label, result in results:
-        assigned = result.completed_count
-        late = result.deadline_violations
-        on_time = assigned - late
-        print(
-            f"{label:18s} "
-            f"{assigned:4d}/{total_tasks:<4d} "
-            f"{on_time:4d}/{total_tasks:<4d} "
-            f"{late:7d} "
-            f"{len(result.unassigned_tasks):11d} "
-            f"{result.total_distance:13.1f} "
-            f"{result.makespan:12.1f}"
-        )
-
-
 def main():
-    demand_map = generate_demand_map(seed=42)
-    tasks, _ = generate_tasks(demand_map=demand_map, seed=42)
-    uavs = generate_uavs(seed=99)
+    demand_map = generate_demand_map(seed = SEED)
+    tasks, _ = generate_tasks(demand_map=demand_map, seed = SEED)
+    uavs = generate_uavs(seed = UAV_SEED)
 
     print_uavs(uavs)
 
-    pso_tasks, pso_uavs = _clone_scenario(tasks, uavs)
-    dmmp_tasks, dmmp_uavs = _clone_scenario(tasks, uavs)
+    result = PSOScheduler().schedule(uavs, tasks)
 
-    pso_result = PSOScheduler().schedule(pso_uavs, pso_tasks)
-    dmmp_result = DMMPPRTSAScheduler().schedule(dmmp_uavs, dmmp_tasks)
+    print_summary(result, tasks, uavs, label="PSO")
+    print_routes(result)
 
-    print_comparison(
-        [("PSO baseline", pso_result), ("DMMP-PR-TSA", dmmp_result)],
-        total_tasks=len(tasks),
+    saved_graphs = save_all_graphs(
+        uavs,
+        tasks,
+        demand_map,
+        result,
+        prefix="pso_"
     )
 
-    print_summary(dmmp_result, dmmp_tasks, dmmp_uavs, label="DMMP-PR-TSA")
-    print_routes(dmmp_result)
-
-    saved_graphs = []
-    saved_graphs.extend(save_all_graphs(pso_uavs, pso_tasks, demand_map, pso_result, prefix="pso_"))
-    saved_graphs.extend(save_all_graphs(dmmp_uavs, dmmp_tasks, demand_map, dmmp_result, prefix="dmmp_"))
     print("\nGenerated graphs")
     for path in saved_graphs:
         print(f"  {path}")
-
 
 if __name__ == "__main__":
     main()

@@ -3,10 +3,18 @@
 #
 # Capability vector C_u(t) = {Cu,E(t), Cu,H(t), Cu,F(t)}
 # =========================================================
+import os
+import sys
 
+ROOT_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..")
+)
+
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 import math
 
-from config import UAV_SPEED, ENERGY_PER_METER
+from common.config import UAV_SPEED, ENERGY_PER_METER
 class UAV:
 
     def __init__(

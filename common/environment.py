@@ -13,10 +13,10 @@ import random
 import math
 import numpy as np
 
-from task import Task
-from uav  import UAV
+from common.task import Task
+from common.uav import UAV
 
-from config import (
+from common.config import (
     MAP_WIDTH,
     MAP_HEIGHT,
     GRID_RESOLUTION,

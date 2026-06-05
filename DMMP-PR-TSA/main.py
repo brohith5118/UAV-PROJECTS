@@ -24,11 +24,20 @@
 #   8. Print mission metrics
 #   9. Visualise results
 # =========================================================
+import os
+import sys
+
+ROOT_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..")
+)
+
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 
 import random
 import numpy as np
 
-from environment  import generate_demand_map, generate_tasks, generate_uavs, generate_new_task
+from common.environment  import generate_demand_map, generate_tasks, generate_uavs, generate_new_task
 from scheduler    import assign_tasks
 from pr_module    import (
     preassign,
@@ -42,6 +51,8 @@ from utils        import print_mission_metrics
 from visualization import plot_all, plot_reward_convergence
 
 from config import (
+    SEED,
+    UAV_SEED,
     NUM_TASKS,
     HIGH_PRIORITY_RATIO,
     NUM_UAVS,
@@ -53,7 +64,6 @@ from config import (
 # ----------------------------------------------------------
 # SEED for reproducibility
 # ----------------------------------------------------------
-SEED = 1
 random.seed(SEED)
 np.random.seed(SEED)
 
@@ -86,7 +96,7 @@ def setup_environment():
           f"(P1={p1}, P2={p2}, P3={p3})")
 
     print(f"\n[3] Generating {NUM_UAVS} heterogeneous UAVs...")
-    uavs = generate_uavs(num_uavs=NUM_UAVS, seed=SEED + 1)
+    uavs = generate_uavs(num_uavs=NUM_UAVS, seed=UAV_SEED)
     for uav in uavs:
         print(f"    {uav}")
 
@@ -214,13 +224,21 @@ def simulate_dynamic_events(tasks, uavs, demand_map, optimize=True):
         t for u in uavs for t in u.assigned_tasks
     ]
     if assigned_tasks_flat:
+        from config import MAP_WIDTH, MAP_HEIGHT, GRID_RESOLUTION
+        map_max_x = MAP_WIDTH  * GRID_RESOLUTION
+        map_max_y = MAP_HEIGHT * GRID_RESOLUTION
+
         update_target = random.choice(assigned_tasks_flat)
         old_pos = (update_target.x, update_target.y)
+        # Shift by a small fraction of the map (≈3–8 % of width)
+        shift_scale = map_max_x * 0.05
         update_target.x = min(
-            update_target.x + random.uniform(3, 8), 49.0
+            update_target.x + random.uniform(shift_scale * 0.6, shift_scale * 1.6),
+            map_max_x - 0.5,
         )
         update_target.y = min(
-            update_target.y + random.uniform(3, 8), 49.0
+            update_target.y + random.uniform(shift_scale * 0.6, shift_scale * 1.6),
+            map_max_y - 0.5,
         )
         print(
             f"     Task {update_target.task_id} "

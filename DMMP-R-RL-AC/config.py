@@ -112,6 +112,6 @@ CC =  25.0   # compute sufficiency reward
 # ---------------------------------------------------------
 # DYNAMIC EVENTS
 # ---------------------------------------------------------
-ENABLE_DYNAMIC_EVENTS   = True  # set to True to enable new task arrivals and UAV failures
+ENABLE_DYNAMIC_EVENTS   = False  # set to True to enable new task arrivals and UAV failures
 NEW_TASK_ARRIVAL_RATE   = 0.1   # probability per time-step
 UAV_FAILURE_PROBABILITY = 0.02

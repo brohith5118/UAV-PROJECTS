@@ -1,50 +1,39 @@
+import os
+import sys
+
+ROOT_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..")
+)
+
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
 import math
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence
 
 import numpy as np
 
-from config import (
-    ALPHA,
+from common.config import (
     BASE_X,
     BASE_Y,
-    C_COMP,
-    C_PHI,
-    C_RES,
-    C_S,
-    C_TIME,
-    CC,
-    CD,
-    CP,
-    CT,
     ENERGY_PER_METER,
-    EPOCHS,
-    EPSILON,
-    GAMMA,
-    ITERATIONS,
-    LAMBDA_TV,
     PSO_COGNITIVE,
     PSO_DEADLINE_PENALTY,
-    PSO_HIGH_PRIORITY_DEADLINE_MULTIPLIER,
     PSO_DISTANCE_WEIGHT,
+    PSO_HIGH_PRIORITY_DEADLINE_MULTIPLIER,
     PSO_INERTIA,
     PSO_INFEASIBLE_PENALTY,
     PSO_ITERATIONS,
     PSO_MAKESPAN_WEIGHT,
     PSO_PRIORITY_REWARD,
+    PSO_RETURN_TO_BASE,
     PSO_SEED,
     PSO_SOCIAL,
     PSO_SWARM_SIZE,
     PSO_TARDINESS_WEIGHT,
     PSO_UNASSIGNED_PENALTY,
-    PSO_RETURN_TO_BASE,
-    RHO,
-    RL_ALPHA,
-    RL_GAMMA,
-    SOM_ITERATIONS,
-    SOM_LEARN_RATE,
-    SOM_ROWS,
-    UAV_SPEED,
+    UAV_SPEED
 )
 
 
@@ -352,7 +341,7 @@ class PSOScheduler:
         pending_tasks: Sequence[object],
         new_tasks: Optional[Iterable[object]] = None,
         failed_uav_ids: Optional[Iterable[int]] = None,
-        scheduler: Optional[PSOScheduler] = None,
+        scheduler: Optional["PSOScheduler"] = None,
     ) -> ScheduleResult:
         """Re-run PSO after dynamic arrivals or UAV failures."""
         failed = set(failed_uav_ids or [])
@@ -367,440 +356,3 @@ class PSOScheduler:
         pso = scheduler or PSOScheduler()
         return pso.schedule(uavs, combined_tasks)
 
-
-class DMMPPRTSAScheduler:
-    """DMMP-PR-TSA implementation from the attached UAV scheduling paper.
-
-    The implementation follows the paper's three linked modules:
-      D   - capacity-constrained power-diagram partitioning, equations (3)-(8)
-      PR  - SOM-based feasibility-aware pre/re-assignment, equations (15)-(26)
-      TSA - Q-learning task sequence adjustment, equations (27)-(30)
-
-    The local project represents paper grid cells as Task objects, so the D module
-    partitions the task set instead of every raster cell.
-    """
-
-    def __init__(
-        self,
-        partition_iterations: int = ITERATIONS,
-        som_iterations: int = SOM_ITERATIONS,
-        rl_epochs: int = EPOCHS,
-        seed: int = PSO_SEED + 101,
-    ):
-        self.partition_iterations = partition_iterations
-        self.som_iterations = som_iterations
-        self.rl_epochs = rl_epochs
-        self.rng = np.random.default_rng(seed)
-
-    def schedule(self, uavs: Sequence[object], tasks: Sequence[object]) -> ScheduleResult:
-        active_uavs = [uav for uav in uavs if getattr(uav, "active", True)]
-        if not active_uavs:
-            return ScheduleResult({}, list(tasks), PSO_INFEASIBLE_PENALTY, 0, 0.0, 0.0, 0.0, 0)
-        if not tasks:
-            return ScheduleResult({uav.uav_id: UAVRoute(uav) for uav in active_uavs}, [], 0.0, 0, 0.0, 0.0, 0.0, 0)
-
-        partitions = self._partition_tasks(active_uavs, tasks)
-        assignments, pr_unassigned = self._som_preassign(active_uavs, tasks, partitions)
-        result = self._tsa_build_schedule(active_uavs, assignments, pr_unassigned)
-        result.history = []
-        self._apply_schedule(result)
-        return result
-
-    # ------------------------------------------------------------------
-    # D module: capacity-constrained power-diagram partitioning
-    # ------------------------------------------------------------------
-
-    def _partition_tasks(self, uavs: Sequence[object], tasks: Sequence[object]) -> Dict[int, List[object]]:
-        mu = {
-            uav.uav_id: {"energy": 0.0, "hover": 0.0, "compute": 0.0}
-            for uav in uavs
-        }
-        assignment: Dict[int, int] = {}
-
-        for _ in range(self.partition_iterations):
-            loads = {
-                uav.uav_id: {"energy": 0.0, "hover": 0.0, "compute": 0.0}
-                for uav in uavs
-            }
-
-            for task in tasks:
-                best_uav = min(
-                    uavs,
-                    key=lambda uav: self._partition_cost(uav, task, mu[uav.uav_id]),
-                )
-                assignment[task.task_id] = best_uav.uav_id
-                loads[best_uav.uav_id]["energy"] += task.energy_cost
-                loads[best_uav.uav_id]["hover"] += task.hover_time
-                loads[best_uav.uav_id]["compute"] += task.compute_load
-
-            for uav in uavs:
-                uid = uav.uav_id
-                mu[uid]["energy"] = max(0.0, mu[uid]["energy"] + RHO * (loads[uid]["energy"] - uav.max_energy))
-                mu[uid]["hover"] = max(0.0, mu[uid]["hover"] + RHO * (loads[uid]["hover"] - uav.max_hover_time))
-                mu[uid]["compute"] = max(0.0, mu[uid]["compute"] + RHO * (loads[uid]["compute"] - uav.max_compute))
-
-        assignment = self._local_refine_partition(uavs, tasks, assignment, mu)
-        partitions = {uav.uav_id: [] for uav in uavs}
-        for task in tasks:
-            partitions[assignment[task.task_id]].append(task)
-        return partitions
-
-    def _partition_cost(self, uav: object, task: object, multipliers: dict) -> float:
-        resource_term = (
-            multipliers["energy"] * task.energy_cost
-            + multipliers["hover"] * task.hover_time
-            + multipliers["compute"] * task.compute_load
-        )
-        return ALPHA * uav.distance_to(task) - GAMMA * task.priority + resource_term
-
-    def _local_refine_partition(
-        self,
-        uavs: Sequence[object],
-        tasks: Sequence[object],
-        assignment: Dict[int, int],
-        mu: Dict[int, dict],
-    ) -> Dict[int, int]:
-        current = dict(assignment)
-        task_by_id = {task.task_id: task for task in tasks}
-        for task in tasks:
-            old_uid = current[task.task_id]
-            best_uid = old_uid
-            best_delta = 0.0
-            for uav in uavs:
-                if uav.uav_id == old_uid:
-                    continue
-                old_uav = next(item for item in uavs if item.uav_id == old_uid)
-                old_cost = self._partition_cost(old_uav, task, mu[old_uid])
-                new_cost = self._partition_cost(uav, task, mu[uav.uav_id])
-                tv_delta = self._tv_delta(task, task_by_id.values(), current, old_uid, uav.uav_id)
-                delta = (new_cost - old_cost) + LAMBDA_TV * tv_delta
-                if delta < best_delta:
-                    best_delta = delta
-                    best_uid = uav.uav_id
-            current[task.task_id] = best_uid
-        return current
-
-    def _tv_delta(
-        self,
-        task: object,
-        tasks: Iterable[object],
-        assignment: Dict[int, int],
-        old_uid: int,
-        new_uid: int,
-    ) -> float:
-        nearest = sorted(
-            (other for other in tasks if other.task_id != task.task_id),
-            key=lambda other: math.hypot(task.x - other.x, task.y - other.y),
-        )[:4]
-        delta = 0.0
-        for other in nearest:
-            other_uid = assignment[other.task_id]
-            delta += (0 if new_uid == other_uid else 1) - (0 if old_uid == other_uid else 1)
-        return delta
-
-    # ------------------------------------------------------------------
-    # PR module: improved SOM pre-assignment and dynamic re-assignment
-    # ------------------------------------------------------------------
-
-    def _som_preassign(
-        self,
-        uavs: Sequence[object],
-        tasks: Sequence[object],
-        partitions: Dict[int, List[object]],
-    ) -> tuple[Dict[int, List[object]], List[object]]:
-        states = {
-            uav.uav_id: {
-                "uav": uav,
-                "x": float(uav.x),
-                "y": float(uav.y),
-                "hover": float(uav.max_hover_time),
-                "compute": float(uav.max_compute),
-                "energy": float(uav.max_energy),
-                "depot_x": float(uav.x),
-                "depot_y": float(uav.y),
-            }
-            for uav in uavs
-        }
-        nodes = self._initial_som_nodes(uavs)
-        ordered_tasks = sorted(tasks, key=lambda item: (-item.priority, item.deadline, item.task_id))
-
-        for iteration in range(max(self.som_iterations, 1)):
-            task = ordered_tasks[iteration % len(ordered_tasks)]
-            winner_uid = self._best_matching_uav(task, uavs, states, partitions, allow_partition_bias=True)
-            if winner_uid is None:
-                continue
-            eta = SOM_LEARN_RATE * (1.0 - iteration / max(self.som_iterations, 1))
-            self._update_som_nodes(nodes, task, winner_uid, eta)
-
-        assignments = {uav.uav_id: [] for uav in uavs}
-        unassigned: List[object] = []
-
-        for task in ordered_tasks:
-            uid = self._best_matching_uav(task, uavs, states, partitions, allow_partition_bias=True)
-            if uid is None:
-                unassigned.append(task)
-                continue
-            state = states[uid]
-            distance = math.hypot(state["x"] - task.x, state["y"] - task.y)
-            travel_time = distance / UAV_SPEED
-            travel_energy = distance * ENERGY_PER_METER
-            state["x"] = float(task.x)
-            state["y"] = float(task.y)
-            state["hover"] -= travel_time + task.hover_time
-            state["compute"] -= task.compute_load
-            state["energy"] -= travel_energy + task.energy_cost
-            assignments[uid].append(task)
-
-        return assignments, unassigned
-
-    def _initial_som_nodes(self, uavs: Sequence[object]) -> Dict[tuple[int, int], np.ndarray]:
-        nodes = {}
-        for row in range(SOM_ROWS):
-            for col, uav in enumerate(uavs):
-                jitter = self.rng.normal(0.0, 0.01, size=5)
-                nodes[(row, uav.uav_id)] = np.array(
-                    [uav.x, uav.y, uav.uav_type, uav.max_hover_time, uav.max_compute],
-                    dtype=float,
-                ) + jitter
-        return nodes
-
-    def _update_som_nodes(
-        self,
-        nodes: Dict[tuple[int, int], np.ndarray],
-        task: object,
-        winner_uid: int,
-        eta: float,
-    ) -> None:
-        target = np.array([task.x, task.y, task.task_type, task.hover_time, task.compute_load], dtype=float)
-        winner_key = min(
-            [key for key in nodes if key[1] == winner_uid],
-            key=lambda key: np.linalg.norm(nodes[key][:2] - target[:2]),
-        )
-        for key, value in nodes.items():
-            grid_distance = abs(key[0] - winner_key[0]) + abs(key[1] - winner_key[1])
-            type_close = abs(value[2] - nodes[winner_key][2]) <= 1.0
-            influence = 1.0 if key == winner_key else (math.exp(-grid_distance / C_S) if type_close else 0.0)
-            if influence > 0:
-                nodes[key] = value + eta * influence * (target - value)
-
-    def _best_matching_uav(
-        self,
-        task: object,
-        uavs: Sequence[object],
-        states: Dict[int, dict],
-        partitions: Dict[int, List[object]],
-        allow_partition_bias: bool,
-    ) -> Optional[int]:
-        scored = []
-        for uav in uavs:
-            state = states[uav.uav_id]
-            distance = math.hypot(state["x"] - task.x, state["y"] - task.y)
-            if not uav.is_compatible(task):
-                continue
-            return_distance = math.hypot(task.x - state["depot_x"], task.y - state["depot_y"])
-            diff_time = state["hover"] - (distance + return_distance) / UAV_SPEED - task.hover_time
-            diff_comp = state["compute"] - task.compute_load
-            diff_energy = state["energy"] - (distance + return_distance) * ENERGY_PER_METER - task.energy_cost
-            if diff_time < 0 or diff_comp < 0 or diff_energy < 0:
-                continue
-
-            d_phi = 0.0 if abs(uav.uav_type - task.task_type) <= 1 else math.inf
-            d_res = math.exp(-C_TIME * diff_time) + math.exp(-C_COMP * diff_comp)
-            partition_bonus = -GAMMA if allow_partition_bias and task in partitions.get(uav.uav_id, []) else 0.0
-            score = distance**2 + C_PHI * d_phi + C_RES * d_res + partition_bonus
-            scored.append((score, uav.uav_id))
-        if not scored:
-            return None
-        return min(scored, key=lambda item: item[0])[1]
-
-    # ------------------------------------------------------------------
-    # TSA module: Q-learning sequence adjustment
-    # ------------------------------------------------------------------
-
-    def _tsa_build_schedule(
-        self,
-        uavs: Sequence[object],
-        assignments: Dict[int, List[object]],
-        unassigned: List[object],
-    ) -> ScheduleResult:
-        routes = {uav.uav_id: UAVRoute(uav) for uav in uavs}
-        still_unassigned = list(unassigned)
-
-        for uav in uavs:
-            tasks = assignments.get(uav.uav_id, [])
-            if not tasks:
-                continue
-            sequence = self._learn_task_sequence(uav, tasks)
-            state = {
-                "uav": uav,
-                "x": float(uav.x),
-                "y": float(uav.y),
-                "energy": float(uav.max_energy),
-                "hover": float(uav.max_hover_time),
-                "compute": float(uav.max_compute),
-                "time": 0.0,
-                "depot_x": float(uav.x),
-                "depot_y": float(uav.y),
-                "route": routes[uav.uav_id],
-            }
-            for task in sequence:
-                event = PSOScheduler()._try_schedule_on_state(state, task)
-                if event is None:
-                    still_unassigned.append(task)
-                    continue
-                route = routes[uav.uav_id]
-                route.scheduled_tasks.append(event)
-                route.total_distance += event.travel_distance
-                route.total_energy += task.energy_cost + event.travel_energy
-                route.total_hover_time += task.hover_time + event.travel_time
-                route.total_compute += task.compute_load
-                route.finish_time = event.finish_time
-
-            route = routes[uav.uav_id]
-            if PSO_RETURN_TO_BASE and route.scheduled_tasks:
-                route.return_distance = math.hypot(state["x"] - state["depot_x"], state["y"] - state["depot_y"])
-                route.return_time = route.return_distance / UAV_SPEED
-                route.return_energy = route.return_distance * ENERGY_PER_METER
-                route.total_distance += route.return_distance
-                route.total_energy += route.return_energy
-                route.total_hover_time += route.return_time
-                route.finish_time += route.return_time
-
-        completed = sum(len(route.scheduled_tasks) for route in routes.values())
-        total_distance = sum(route.total_distance for route in routes.values())
-        makespan = max((route.finish_time for route in routes.values()), default=0.0)
-        deadline_violations = sum(
-            1
-            for route in routes.values()
-            for event in route.scheduled_tasks
-            if event.finish_time > event.task.deadline
-        )
-        priority_score = sum(
-            event.task.priority
-            for route in routes.values()
-            for event in route.scheduled_tasks
-        )
-        fitness = (
-            len(still_unassigned) * PSO_UNASSIGNED_PENALTY
-            + deadline_violations * PSO_DEADLINE_PENALTY
-            + total_distance * PSO_DISTANCE_WEIGHT
-            + makespan * PSO_MAKESPAN_WEIGHT
-            - priority_score * PSO_PRIORITY_REWARD
-        )
-
-        return ScheduleResult(
-            routes=routes,
-            unassigned_tasks=still_unassigned,
-            fitness=fitness,
-            completed_count=completed,
-            total_priority_score=priority_score,
-            total_distance=total_distance,
-            makespan=makespan,
-            deadline_violations=deadline_violations,
-        )
-
-    def _learn_task_sequence(self, uav: object, tasks: Sequence[object]) -> List[object]:
-        if len(tasks) <= 1:
-            return list(tasks)
-
-        count = len(tasks)
-        q_values = np.zeros((count + 1, count), dtype=float)
-        base_state = count
-
-        for _ in range(max(self.rl_epochs, 1)):
-            current_state = base_state
-            current_x = float(uav.x)
-            current_y = float(uav.y)
-            residual_time = float(uav.max_hover_time)
-            residual_compute = float(uav.max_compute)
-            remaining = set(range(count))
-
-            while remaining:
-                feasible = [
-                    idx for idx in remaining
-                    if self._transition_feasible(current_x, current_y, residual_time, residual_compute, tasks[idx], uav.x, uav.y)
-                ]
-                if not feasible:
-                    break
-                if self.rng.random() < EPSILON:
-                    action = int(self.rng.choice(feasible))
-                else:
-                    action = max(feasible, key=lambda idx: q_values[current_state, idx])
-
-                task = tasks[action]
-                distance = math.hypot(current_x - task.x, current_y - task.y)
-                travel_time = distance / UAV_SPEED
-                reward = self._tsa_reward(distance, task, uav, residual_time, residual_compute)
-                next_state = action
-                remaining.remove(action)
-                next_feasible = list(remaining)
-                future = max((q_values[next_state, idx] for idx in next_feasible), default=0.0)
-                q_values[current_state, action] = (
-                    (1.0 - RL_ALPHA) * q_values[current_state, action]
-                    + RL_ALPHA * (reward + RL_GAMMA * future)
-                )
-                residual_time -= travel_time + task.hover_time
-                residual_compute -= task.compute_load
-                current_x = float(task.x)
-                current_y = float(task.y)
-                current_state = next_state
-
-        sequence = []
-        current_state = base_state
-        current_x = float(uav.x)
-        current_y = float(uav.y)
-        residual_time = float(uav.max_hover_time)
-        residual_compute = float(uav.max_compute)
-        remaining = set(range(count))
-        while remaining:
-            feasible = [
-                idx for idx in remaining
-                if self._transition_feasible(current_x, current_y, residual_time, residual_compute, tasks[idx], uav.x, uav.y)
-            ]
-            if not feasible:
-                sequence.extend(sorted((tasks[idx] for idx in remaining), key=lambda task: (-task.priority, task.deadline)))
-                break
-            action = max(feasible, key=lambda idx: (q_values[current_state, idx], tasks[idx].priority, -tasks[idx].deadline))
-            task = tasks[action]
-            distance = math.hypot(current_x - task.x, current_y - task.y)
-            residual_time -= distance / UAV_SPEED + task.hover_time
-            residual_compute -= task.compute_load
-            current_x = float(task.x)
-            current_y = float(task.y)
-            current_state = action
-            remaining.remove(action)
-            sequence.append(task)
-        return sequence
-
-    def _transition_feasible(
-        self,
-        current_x: float,
-        current_y: float,
-        residual_time: float,
-        residual_compute: float,
-        task: object,
-        depot_x: float,
-        depot_y: float,
-    ) -> bool:
-        distance = math.hypot(current_x - task.x, current_y - task.y)
-        return_distance = math.hypot(task.x - depot_x, task.y - depot_y)
-        required_time = (distance + return_distance) / UAV_SPEED + task.hover_time
-        return residual_time + 1e-9 >= required_time and residual_compute + 1e-9 >= task.compute_load
-
-    def _tsa_reward(
-        self,
-        distance: float,
-        task: object,
-        uav: object,
-        residual_time: float,
-        residual_compute: float,
-    ) -> float:
-        endurance_ratio = residual_time / uav.max_hover_time if uav.max_hover_time > 0 else 0.0
-        if uav.max_compute > 0:
-            compute_ratio = (residual_compute - task.compute_load) / uav.max_compute
-        else:
-            compute_ratio = 1.0 if task.compute_load <= 0 else -1.0
-        return CD * (distance / 1000.0) + CP * task.priority + CT * endurance_ratio + CC * compute_ratio
-
-    def _apply_schedule(self, result: ScheduleResult) -> None:
-        PSOScheduler()._apply_schedule(result)

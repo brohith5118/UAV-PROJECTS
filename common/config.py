@@ -120,3 +120,33 @@ CC =  80.0  # c_c  compute-sufficiency reward
 ENABLE_DYNAMIC_EVENTS   = False  # set to True to enable new task arrivals and UAV failures
 NEW_TASK_ARRIVAL_RATE   = 0.1   # probability per time-step
 UAV_FAILURE_PROBABILITY = 0.02
+
+
+#PSO
+
+BASE_X = 0.0
+BASE_Y = 0.0
+
+# ---------------------------------------------------------
+# PSO BASELINE
+# ---------------------------------------------------------
+# Particle encoding uses two values per task:
+#   - assignment key: preferred UAV index
+#   - sequence key: task ordering priority during decoding
+PSO_SWARM_SIZE = 60
+PSO_ITERATIONS = 150
+PSO_INERTIA = 0.72
+PSO_COGNITIVE = 1.49
+PSO_SOCIAL = 1.49
+PSO_SEED = 1
+
+# Fitness weights. Lower fitness is better.
+PSO_UNASSIGNED_PENALTY = 100000.0
+PSO_INFEASIBLE_PENALTY = 1000000.0
+PSO_DEADLINE_PENALTY = 500.0
+PSO_TARDINESS_WEIGHT = 60.0
+PSO_HIGH_PRIORITY_DEADLINE_MULTIPLIER = 3.0
+PSO_PRIORITY_REWARD = 200.0
+PSO_DISTANCE_WEIGHT = 1.0
+PSO_MAKESPAN_WEIGHT = 20.0
+PSO_RETURN_TO_BASE = True

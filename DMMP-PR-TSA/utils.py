@@ -133,6 +133,46 @@ def estimate_finish_time(uav, route, uav_speed, start_time=0.0):
     return results
 
 
+def estimate_route_usage(uav, route, uav_speed, energy_per_meter):
+    """
+    Estimate sequential energy, hover-time, and compute usage for a route.
+    This follows the actual execution order after TSA rather than charging
+    each task independently from the depot.
+    """
+    current_x = uav.x
+    current_y = uav.y
+    total_energy = 0.0
+    total_hover = 0.0
+    total_compute = 0.0
+
+    for task in route:
+        dist = euclidean_distance(current_x, current_y, task.x, task.y)
+        total_energy += dist * energy_per_meter + task.energy_cost
+        total_hover += dist / uav_speed + task.hover_time
+        total_compute += task.compute_load
+        current_x = task.x
+        current_y = task.y
+
+    return total_energy, total_hover, total_compute
+
+
+def recompute_route_resources(uav, route=None):
+    """Reset residual UAV resources from the current TSA route order."""
+    from config import UAV_SPEED, ENERGY_PER_METER
+
+    route = uav.assigned_tasks if route is None else route
+    energy, hover, compute = estimate_route_usage(
+        uav,
+        route,
+        UAV_SPEED,
+        ENERGY_PER_METER,
+    )
+    uav.remaining_energy = uav.max_energy - energy
+    uav.remaining_hover_time = uav.max_hover_time - hover
+    uav.remaining_compute = uav.max_compute - compute
+    return energy, hover, compute
+
+
 # ----------------------------------------------------------
 # MISSION METRICS
 # ----------------------------------------------------------

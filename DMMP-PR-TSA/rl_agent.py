@@ -451,12 +451,22 @@ class QLearningTrajectoryPlanner:
         feasible position.
 
         Returns the adjusted route.
-        """
-        route    = list(route)
-        adjusted = True
 
-        while adjusted:
-            adjusted  = False
+        Guard rails:
+          - Only marks adjusted=True when the route actually changes.
+          - Caps iterations at n*(n-1)//2 to prevent infinite loops
+            when no reordering can fix a structurally infeasible
+            deadline (e.g. task moved far away after a location update).
+        """
+        route       = list(route)
+        n           = len(route)
+        max_iters   = max(1, n * (n - 1) // 2)
+        iteration   = 0
+
+        adjusted = True
+        while adjusted and iteration < max_iters:
+            adjusted = False
+            iteration += 1
             timeline  = estimate_finish_time(
                 self.uav, route, UAV_SPEED
             )
@@ -465,7 +475,6 @@ class QLearningTrajectoryPlanner:
                 if check_deadline(task, ft):
                     continue
                 # Task is at risk – try moving it earlier
-                best_pos = rank
                 for pos in range(rank):
                     candidate = route[:pos] + [task] + \
                                 route[pos:rank] + route[rank + 1:]
@@ -474,13 +483,12 @@ class QLearningTrajectoryPlanner:
                     )
                     _, ft2 = tl2[pos]
                     if check_deadline(task, ft2):
-                        best_pos = pos
-                        break
-                if best_pos != rank:
-                    route.pop(rank)
-                    route.insert(best_pos, task)
-                    adjusted = True
-                    break   # restart scan
+                        # A beneficial move was found – apply it
+                        route = candidate
+                        adjusted = True
+                        break   # restart scan from new timeline
+                if adjusted:
+                    break
 
         return route
 

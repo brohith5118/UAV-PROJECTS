@@ -8,6 +8,9 @@
 # ---------------------------------------------------------
 # MAP / GRID SETTINGS
 # ---------------------------------------------------------
+SEED = 42
+UAV_SEED = 99
+
 MAP_WIDTH  = 100
 MAP_HEIGHT = 100
 
@@ -38,7 +41,7 @@ TASK_TYPE_RATIO = {-1: 0.4, 0: 0.3, 1: 0.3}
 # ---------------------------------------------------------
 # UAV FLEET SETTINGS
 # ---------------------------------------------------------
-NUM_UAVS = 5
+NUM_UAVS = 4
 
 # Energy budget  (J)
 MIN_ENERGY = 12000
@@ -131,7 +134,7 @@ PSO_ITERATIONS = 150
 PSO_INERTIA = 0.72
 PSO_COGNITIVE = 1.49
 PSO_SOCIAL = 1.49
-PSO_SEED = 7
+PSO_SEED = 1
 
 # Fitness weights. Lower fitness is better.
 PSO_UNASSIGNED_PENALTY = 100000.0
