@@ -162,7 +162,7 @@ class PSOScheduler:
         task_count = len(tasks)
         assignment_keys = particle[:task_count]
         sequence_keys = particle[task_count:]
-        task_order = sorted(range(task_count), key=lambda idx: (sequence_keys[idx], -tasks[idx].priority))
+        task_order = sorted(range(task_count), key=lambda idx: (sequence_keys[idx], tasks[idx].priority))
 
         states = {
             uav.uav_id: {
@@ -231,7 +231,7 @@ class PSOScheduler:
         for route in routes.values():
             for event in route.scheduled_tasks:
                 if event.finish_time > event.task.deadline:
-                    multiplier = PSO_HIGH_PRIORITY_DEADLINE_MULTIPLIER if event.task.priority == 3 else 1.0
+                    multiplier = PSO_HIGH_PRIORITY_DEADLINE_MULTIPLIER if event.task.priority == 1 else 1.0
                     tardiness = event.finish_time - event.task.deadline
                     weighted_deadline_penalty += (
                         PSO_DEADLINE_PENALTY * multiplier

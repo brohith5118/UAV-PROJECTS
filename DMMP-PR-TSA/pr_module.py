@@ -20,11 +20,21 @@
 #   (3) UAV failure / task redistribution
 #   (4) Task cancellation
 # =========================================================
+import os
+import sys
+
+ROOT_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..")
+)
+
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
 
 import math
 import numpy as np
 
-from config import (
+from common.config import (
     SOM_ITERATIONS,
     SOM_LEARN_RATE,
     C_PHI,

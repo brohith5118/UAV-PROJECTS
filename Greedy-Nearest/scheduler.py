@@ -1,6 +1,17 @@
+import os
+import sys
+
+ROOT_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..")
+)
+
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
+
 import math
 
-from config import ENERGY_PER_METER, UAV_SPEED
+from common.config import ENERGY_PER_METER, UAV_SPEED
 
 def curr_distance(uav, task):
     return math.hypot(uav.x - task.x, uav.y - task.y)
@@ -12,7 +23,7 @@ def is_feasible(uav, task):
         return False
     if uav.curr_hover < task.hover_time:
         return False
-    if uav.curr_compute < task.compute_cost:
+    if uav.curr_compute < task.compute_load:
         return False
     return True
 
@@ -28,7 +39,7 @@ def is_feasible_with_travel(uav, task, runtime):
         return False
     if uav.curr_hover < task.hover_time + travel_hover_time:
         return False
-    if uav.curr_compute < task.compute_cost:
+    if uav.curr_compute < task.compute_load:
         return False
     return True
 
@@ -72,11 +83,11 @@ def establish_path(tasks,uavs):
 def run_path(uavs):
     for uav in uavs:
         uav.reset_position()
-        uav.reset_resource()
+        uav.reset_resources()
         runtime = 0
         for task in uav.assigned_tasks:
             if is_feasible_with_travel(uav, task,runtime):
-                uav.compute_resource_with_travel(task)
+                uav.consume_resources(task)
                 runtime += task.hover_time + curr_distance(uav, task) / UAV_SPEED
                 task.completed = True
             else:

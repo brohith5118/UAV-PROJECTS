@@ -8,9 +8,8 @@
 # ---------------------------------------------------------
 # MAP / GRID SETTINGS
 # ---------------------------------------------------------
-SEED = 42
-UAV_SEED = 99
-
+SEED = 1
+UAV_SEED = 1
 MAP_WIDTH  = 100
 MAP_HEIGHT = 100
 
@@ -27,9 +26,9 @@ HIGH_PRIORITY_RATIO = 0.4
 # 2 = important (deadline 1000 s)
 # 3 = routine   (deadline 1200 s)
 PRIORITY_DEADLINES = {
-    1: 1000,
-    2: 1400,
-    3: 1800
+    1: 800,
+    2: 1000,
+    3: 1200
 }
 
 # Task type flags  (paper eq 13 / Table 3)
@@ -150,3 +149,6 @@ PSO_PRIORITY_REWARD = 200.0
 PSO_DISTANCE_WEIGHT = 1.0
 PSO_MAKESPAN_WEIGHT = 20.0
 PSO_RETURN_TO_BASE = True
+
+
+GENERATED_GRAPHS_DIR = "generated_graphs"

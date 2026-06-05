@@ -14,15 +14,15 @@ from common.environment import generate_demand_map, generate_tasks, generate_uav
 from scheduler import PSOScheduler
 from visualization import save_all_graphs
 
-from config import (
+from common.config import (
     SEED,
     UAV_SEED,
 )
 
 PRIORITY_NAMES = {
-    1: "Low/Routine",
+    1: "High/Critical",
     2: "Medium/Important",
-    3: "High/Critical",
+    3: "Low/Routine",
 }
 
 
@@ -175,6 +175,10 @@ def print_routes(result):
 
 
 def main():
+    import time
+
+    start = time.perf_counter()
+
     demand_map = generate_demand_map(seed = SEED)
     tasks, _ = generate_tasks(demand_map=demand_map, seed = SEED)
     uavs = generate_uavs(seed = UAV_SEED)
@@ -197,6 +201,29 @@ def main():
     print("\nGenerated graphs")
     for path in saved_graphs:
         print(f"  {path}")
+
+    runtime = time.perf_counter() - start
+
+    total_tasks = 0
+    completed_tasks = 0
+    high_priority_completed = 0
+    for task in tasks:
+        total_tasks += 1
+        if task.completed:
+            completed_tasks += 1
+            if task.priority == 1:
+                high_priority_completed += 1
+
+    return {
+        "completion_rate": completed_tasks / total_tasks if total_tasks > 0 else 0.0,
+        "high_priority_completion_rate": high_priority_completed / total_tasks if total_tasks > 0 else 0.0,
+        "uavs": uavs,
+        "tasks": tasks,
+        "demand_map": demand_map,
+        "runtime": runtime
+    }
+
+
 
 if __name__ == "__main__":
     main()

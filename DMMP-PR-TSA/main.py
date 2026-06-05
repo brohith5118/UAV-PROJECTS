@@ -27,6 +27,8 @@
 import os
 import sys
 
+import time
+
 ROOT_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..")
 )
@@ -50,7 +52,7 @@ from rl_agent     import run_tsa_for_fleet, QLearningTrajectoryPlanner
 from utils        import print_mission_metrics
 from visualization import plot_all, plot_reward_convergence
 
-from config import (
+from common.config import (
     SEED,
     UAV_SEED,
     NUM_TASKS,
@@ -307,7 +309,7 @@ def visualise(uavs, routes, tasks, demand_map, reward_logs, save_dir=None, prefi
 
 def main(optimize=True, save_dir=None, prefix=""):
     import math
-    from config import ENERGY_PER_METER, UAV_SPEED
+    from common.config import ENERGY_PER_METER, UAV_SPEED
     from utils import (
         completion_rate,
         high_priority_completion_rate,
@@ -315,7 +317,7 @@ def main(optimize=True, save_dir=None, prefix=""):
         energy_utilisation,
         compute_utilisation,
     )
-
+    start_time = time.perf_counter()
     # ---- Environment ----
     demand_map, tasks, uavs = setup_environment()
 
@@ -323,7 +325,7 @@ def main(optimize=True, save_dir=None, prefix=""):
     uavs, _unassigned = run_d_module(tasks, uavs)
 
     # ---- PR-Module ----
-    uavs = run_pr_module(tasks, uavs, optimize=optimize)
+    # uavs = run_pr_module(tasks, uavs, optimize=optimize)
 
     # ---- TSA + Dynamic Events ----
     routes, reward_logs, event_log = simulate_dynamic_events(
@@ -369,6 +371,8 @@ def main(optimize=True, save_dir=None, prefix=""):
     else:
         jains_index = 0.0
 
+    runtime = time.perf_counter() - start_time
+
     metrics = {
         "completion_rate": cr,
         "high_priority_completion_rate": hcr,
@@ -376,7 +380,8 @@ def main(optimize=True, save_dir=None, prefix=""):
         "energy_utilisation": eu,
         "compute_utilisation": cu,
         "overloaded_uav_count": overloaded_count,
-        "jains_fairness_index": jains_index
+        "jains_fairness_index": jains_index,
+        "runtime": runtime,
     }
 
     return metrics

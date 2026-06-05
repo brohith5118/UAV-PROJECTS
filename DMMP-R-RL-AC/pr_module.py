@@ -4,9 +4,16 @@
 # Replaces the SOM competitive learning with an extremely
 # efficient, capacity-aware K-Means++ clustering algorithm.
 # =========================================================
-
-import sys
 import os
+import sys
+
+ROOT_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..")
+)
+
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
 import math
 import numpy as np
 
@@ -15,7 +22,7 @@ parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-from config import (
+from common.config import (
     UAV_SPEED,
     ENERGY_PER_METER,
     UAV_TYPE_MAX_FLIGHT,

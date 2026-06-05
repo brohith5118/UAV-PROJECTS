@@ -20,35 +20,24 @@ from common.config import (
     NUM_UAVS
 )
 
+import time
+
 
 def setup_environment():
     demand_map = generate_demand_map(SEED)
     print(f"Generated Map with seed {SEED}\n")
-    tasks = generate_tasks(NUM_TASKS,HIGH_PRIORITY_RATIO,demand_map,SEED)
+    tasks, _ = generate_tasks(NUM_TASKS,HIGH_PRIORITY_RATIO,demand_map,SEED)
     print(f"Generated {NUM_TASKS} tasks according to seed {SEED}\n")
     uavs = generate_uavs(NUM_UAVS, UAV_SEED)
     print(f"Generated {NUM_UAVS} UAVs according to seed {UAV_SEED}\n")
 
     return demand_map, tasks, uavs
 
-demand_map, tasks, uavs = setup_environment()
-plot_demand_map(demand_map, tasks)
 
 def schedule_tasks(tasks, uavs):
     unassigned_tasks = assign_tasks(tasks, uavs)
     return unassigned_tasks
 
-unassigned_tasks = schedule_tasks(tasks, uavs)
-print(f"Number of unassigned tasks: {len(unassigned_tasks)}")
-print(f"Unassigned Tasks: {[task.task_id for task in unassigned_tasks]}")
-
-for uav in uavs:
-    print(f"UAV {uav.uav_id} assigned tasks: {[task.task_id for task in uav.assigned_tasks]}")
-
-establish_path(tasks, uavs)
-print("\nEstablished paths for UAVs based on assigned tasks and priorities.\n")
-for uav in uavs:
-    print(f"UAV {uav.uav_id} path: {[task.task_id for task in uav.assigned_tasks]}")
 
 def run_path_results(uavs):
     run_path(uavs)
@@ -57,8 +46,6 @@ def run_path_results(uavs):
         print(f"UAV {uav.uav_id} tasks executed successfully: {[task.task_id for task in uav.assigned_tasks if task.completed]}")
         print(f"UAV {uav.uav_id} tasks failed: {[task.task_id for task in uav.assigned_tasks if not task.completed]}")
 
-run_path_results(uavs)
-
 def visualize_results(demand_map, tasks, uavs):
     plot_demand_map(demand_map, tasks)
     print("\nVisualized demand map with task completion status.\n")
@@ -66,8 +53,6 @@ def visualize_results(demand_map, tasks, uavs):
     plot_uavs(uavs)
     print("\nVisualized UAVs and their locations")
     
-
-visualize_results(demand_map, tasks, uavs)
 
 def print_summary(uavs,tasks):
     completed_tasks = 0
@@ -78,4 +63,50 @@ def print_summary(uavs,tasks):
         total_tasks += 1
     print(f"Overall completion rate: {completed_tasks * 100/total_tasks}%")
 
-print_summary(uavs,tasks)
+def main():
+    start = time.perf_counter()
+    demand_map, tasks, uavs = setup_environment()
+    plot_demand_map(demand_map, tasks)
+    unassigned_tasks = schedule_tasks(tasks, uavs)
+    print(f"Number of unassigned tasks: {len(unassigned_tasks)}")
+    print(f"Unassigned Tasks: {[task.task_id for task in unassigned_tasks]}")
+
+    for uav in uavs:
+        print(f"UAV {uav.uav_id} assigned tasks: {[task.task_id for task in uav.assigned_tasks]}")
+
+    establish_path(tasks, uavs)
+    print("\nEstablished paths for UAVs based on assigned tasks and priorities.\n")
+    for uav in uavs:
+        print(f"UAV {uav.uav_id} path: {[task.task_id for task in uav.assigned_tasks]}")
+
+    run_path_results(uavs)
+
+    visualize_results(demand_map, tasks, uavs)
+
+
+    print_summary(uavs,tasks)
+
+    runtime = time.perf_counter() - start
+
+    total_tasks = 0
+    completed_tasks = 0
+    high_priority_tasks = 0
+    for task in tasks:
+        total_tasks += 1
+        if task.completed:
+            if task.priority == 1:
+                high_priority_tasks += 1
+            completed_tasks += 1
+
+    return {
+        "completion_rate": completed_tasks / total_tasks,
+        "high_priority_completion_rate": high_priority_tasks / total_tasks,
+        "runtime_seconds": runtime
+    }
+
+if __name__ == "__main__":
+    results = main()
+    print("\nSummary of Results:")
+    print(f"Overall Task Completion Rate: {results['completion_rate']:.2%}")
+    print(f"High Priority Task Completion Rate: {results['high_priority_completion_rate']:.2%}")
+    print(f"Total Runtime: {results['runtime_seconds']:.2f} seconds")

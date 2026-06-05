@@ -33,6 +33,9 @@ class UAV:
         self.y        = y
         self.uav_type = uav_type   # ψ_{UAV_u}
 
+        self.curr_x = x
+        self.curr_y = y
+
         # -----------------------------------------------
         # Maximum capacity
         # -----------------------------------------------
@@ -46,6 +49,9 @@ class UAV:
         self.remaining_energy     = max_energy
         self.remaining_hover_time = max_hover_time
         self.remaining_compute    = max_compute
+        self.curr_energy     = max_energy
+        self.curr_hover = max_hover_time
+        self.curr_compute    = max_compute
 
         # -----------------------------------------------
         # Lagrange multipliers μ_{u,k}  (eq 8)
@@ -139,6 +145,10 @@ class UAV:
         self.remaining_hover_time = self.max_hover_time
         self.remaining_compute    = self.max_compute
 
+    def reset_position(self):
+        self.curr_x = self.x
+        self.curr_y = self.y
+
     def consume_resources(self, task):
         """Deduct task workload from residual capacities."""
         travel_energy = self.distance_to(task) * ENERGY_PER_METER
@@ -146,6 +156,21 @@ class UAV:
         self.remaining_energy     -= task.energy_cost + travel_energy
         self.remaining_hover_time -= travel_time + task.hover_time
         self.remaining_compute    -= task.compute_load
+
+    def compute_resource(self, task):
+        """Deduct task workload from residual capacities."""
+        self.remaining_energy     -= task.energy_cost
+        self.remaining_hover_time -= task.hover_time
+        self.remaining_compute    -= task.compute_load
+
+    def move_to(self, task):
+        """Update UAV position to task location."""
+        self.curr_x = task.x
+        self.curr_y = task.y
+
+    def assign(self, task):
+        self.assigned_tasks.append(task)
+        task.assigned_uav = self.uav_id
 
     def __repr__(self):
         return (

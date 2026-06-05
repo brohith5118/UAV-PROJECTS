@@ -1,10 +1,19 @@
 # =========================================================
 # UTILS - shared helper functions
 # =========================================================
+import os
+import sys
+
+ROOT_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..")
+)
+
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 
 import math
 
-from config import MAP_WIDTH, MAP_HEIGHT, GRID_RESOLUTION
+from common.config import MAP_WIDTH, MAP_HEIGHT, GRID_RESOLUTION, UAV_SPEED
 
 
 # ----------------------------------------------------------
@@ -120,7 +129,6 @@ def completion_rate(uavs, all_tasks):
     """
     Fraction of tasks completed on time.
     """
-    from config import UAV_SPEED
 
     total = len(all_tasks)
     completed = 0
@@ -138,7 +146,6 @@ def completion_rate(uavs, all_tasks):
 
 def high_priority_completion_rate(uavs, tasks):
     """Completion rate restricted to priority-1 tasks."""
-    from config import UAV_SPEED
 
     hi_total = 0
     hi_completed = 0

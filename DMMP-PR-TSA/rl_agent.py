@@ -27,13 +27,23 @@
 # by the D and PR stages makes tabular Q-learning efficient
 # and convergence fast (few hundred episodes).
 # =========================================================
+import os
+import sys
+
+ROOT_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..")
+)
+
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
 
 import math
 import random
 import numpy as np
 
 from utils import calculate_reward, estimate_finish_time, check_deadline
-from config import (
+from common.config import (
     EPOCHS,
     RL_ALPHA,
     RL_GAMMA,

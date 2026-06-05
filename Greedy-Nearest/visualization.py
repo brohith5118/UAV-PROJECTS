@@ -1,15 +1,27 @@
+import os
+import sys
+
+ROOT_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..")
+)
+
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
+
 import math
 import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
-import os
 
-from config import MAP_WIDTH, MAP_HEIGHT, GRID_RESOLUTION
+
+from common.config import MAP_WIDTH, MAP_HEIGHT, GRID_RESOLUTION
 
 save_dir = 'generated_figures'
 prefix = ''
 
+os.makedirs(save_dir, exist_ok=True)
 PRIORITY_COLORS = {
     3: 'green',
     2: 'orange',
@@ -72,7 +84,7 @@ def plot_uavs(uavs):
     for uav in uavs:
         plt.scatter(
             uav.x,
-            uav.x,
+            uav.y,
             c='blue',
             edgecolors='black',
             s=80,

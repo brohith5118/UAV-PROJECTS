@@ -1,5 +1,15 @@
-import math
 import os
+import sys
+
+ROOT_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..")
+)
+
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
+
+import math
 from pathlib import Path
 
 import matplotlib
@@ -10,7 +20,7 @@ import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
 
-from config import GENERATED_GRAPHS_DIR, GRID_RESOLUTION, MAP_HEIGHT, MAP_WIDTH
+from common.config import GENERATED_GRAPHS_DIR, GRID_RESOLUTION, MAP_HEIGHT, MAP_WIDTH
 
 
 UAV_COLORS = [
@@ -31,8 +41,8 @@ UAV_COLORS = [
     "#c5b0d5",
 ]
 
-PRIORITY_COLORS = {1: "#2ca02c", 2: "#ff7f0e", 3: "#d62728"}
-PRIORITY_LABELS = {1: "Routine (P1)", 2: "Important (P2)", 3: "Critical (P3)"}
+PRIORITY_COLORS = {1: "#d62728", 2: "#ff7f0e", 3: "#2ca02c"}
+PRIORITY_LABELS = {1: "Critical (P1)", 2: "Important (P2)", 3: "Routine (P3)"}
 
 
 def _uav_color(uav_id):
@@ -106,7 +116,7 @@ def plot_assignment_map(ax, uavs, tasks, result, demand_map, label="PSO"):
     for task in tasks:
         uid = task.assigned_uav
         color = _uav_color(uid) if uid is not None else "#999999"
-        marker = "*" if task.priority == 3 else "o"
+        marker = "*" if task.priority == 1 else "o"
         ax.scatter(
             task.x,
             task.y,
