@@ -17,6 +17,9 @@ from visualization import save_all_graphs
 from common.config import (
     SEED,
     UAV_SEED,
+    NUM_TASKS,
+    NUM_UAVS,
+    HIGH_PRIORITY_RATIO,
 )
 
 PRIORITY_NAMES = {
@@ -41,6 +44,74 @@ def _scheduled_events(result):
 
 def _task_percentage(count, total):
     return 0.0 if total == 0 else (count / total) * 100.0
+
+
+def compute_metrics(result, tasks, uavs):
+    scheduled_events = _scheduled_events(result)
+    on_time_events = [
+        event for event in scheduled_events
+        if event.finish_time <= event.task.deadline
+    ]
+    high_priority_tasks = [task for task in tasks if task.priority == 1]
+    high_priority_on_time = [
+        event for event in on_time_events
+        if event.task.priority == 1
+    ]
+    active_uavs = [uav for uav in uavs if getattr(uav, "active", True)]
+    workloads = []
+    for uav in active_uavs:
+        route = result.routes.get(uav.uav_id)
+        workloads.append(len(route.scheduled_tasks) if route else 0)
+    if workloads and sum(workloads) > 0:
+        fairness = (sum(workloads) ** 2) / (
+            len(workloads) * sum(count ** 2 for count in workloads)
+        )
+    else:
+        fairness = 0.0
+
+    energy_ratios = [
+        1.0 - (uav.remaining_energy / uav.max_energy)
+        for uav in active_uavs
+        if uav.max_energy > 0
+    ]
+    compute_ratios = [
+        1.0 - (uav.remaining_compute / uav.max_compute)
+        for uav in active_uavs
+        if uav.max_compute > 0
+    ]
+    overloaded_count = sum(
+        1
+        for uav in active_uavs
+        if (
+            uav.remaining_energy < -1e-9
+            or uav.remaining_hover_time < -1e-9
+            or uav.remaining_compute < -1e-9
+        )
+    )
+
+    return {
+        "completion_rate": len(on_time_events) / len(tasks) if tasks else 0.0,
+        "high_priority_completion_rate": (
+            len(high_priority_on_time) / len(high_priority_tasks)
+            if high_priority_tasks else 0.0
+        ),
+        "assignment_rate": len(scheduled_events) / len(tasks) if tasks else 0.0,
+        "deadline_violation_rate": (
+            result.deadline_violations / len(scheduled_events)
+            if scheduled_events else 0.0
+        ),
+        "total_travel_distance": result.total_distance,
+        "energy_utilisation": (
+            sum(energy_ratios) / len(energy_ratios)
+            if energy_ratios else 0.0
+        ),
+        "compute_utilisation": (
+            sum(compute_ratios) / len(compute_ratios)
+            if compute_ratios else 0.0
+        ),
+        "overloaded_uav_count": overloaded_count,
+        "jains_fairness_index": fairness,
+    }
 
 
 def print_summary(result, tasks, uavs, label="Schedule"):
@@ -174,14 +245,22 @@ def print_routes(result):
         print(f"\nUnassigned: {ids}")
 
 
-def main():
+def main(num_tasks=NUM_TASKS, num_uavs=NUM_UAVS):
     import time
 
     start = time.perf_counter()
 
     demand_map = generate_demand_map(seed = SEED)
-    tasks, _ = generate_tasks(demand_map=demand_map, seed = SEED)
-    uavs = generate_uavs(seed = UAV_SEED)
+    tasks, _ = generate_tasks(
+        num_tasks=num_tasks if num_tasks is not None else NUM_TASKS,
+        high_priority_ratio=HIGH_PRIORITY_RATIO,
+        demand_map=demand_map,
+        seed = SEED
+    )
+    uavs = generate_uavs(
+        num_uavs=num_uavs if num_uavs is not None else NUM_UAVS,
+        seed = UAV_SEED
+    )
 
     print_uavs(uavs)
 
@@ -190,33 +269,24 @@ def main():
     print_summary(result, tasks, uavs, label="PSO")
     print_routes(result)
 
-    saved_graphs = save_all_graphs(
-        uavs,
-        tasks,
-        demand_map,
-        result,
-        prefix="pso_"
-    )
+    # saved_graphs = save_all_graphs(
+    #     uavs,
+    #     tasks,
+    #     demand_map,
+    #     result,
+    #     prefix="pso_"
+    # )
 
-    print("\nGenerated graphs")
-    for path in saved_graphs:
-        print(f"  {path}")
+    # print("\nGenerated graphs")
+    # for path in saved_graphs:
+    #     print(f"  {path}")
 
     runtime = time.perf_counter() - start
-
-    total_tasks = 0
-    completed_tasks = 0
-    high_priority_completed = 0
-    for task in tasks:
-        total_tasks += 1
-        if task.completed:
-            completed_tasks += 1
-            if task.priority == 1:
-                high_priority_completed += 1
+    metrics = compute_metrics(result, tasks, uavs)
+    print(f"Completion rate: {metrics['completion_rate']:.2%}")
 
     return {
-        "completion_rate": completed_tasks / total_tasks if total_tasks > 0 else 0.0,
-        "high_priority_completion_rate": high_priority_completed / total_tasks if total_tasks > 0 else 0.0,
+        **metrics,
         "uavs": uavs,
         "tasks": tasks,
         "demand_map": demand_map,
@@ -226,4 +296,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main(40, 5)

@@ -14,7 +14,9 @@ import math
 from common.config import ENERGY_PER_METER, UAV_SPEED
 
 def curr_distance(uav, task):
-    return math.hypot(uav.x - task.x, uav.y - task.y)
+    current_x = getattr(uav, "curr_x", uav.x)
+    current_y = getattr(uav, "curr_y", uav.y)
+    return math.hypot(current_x - task.x, current_y - task.y)
 
 def is_feasible(uav, task):
     if not uav.active:
@@ -86,9 +88,15 @@ def run_path(uavs):
         uav.reset_resources()
         runtime = 0
         for task in uav.assigned_tasks:
+            travel_dist = curr_distance(uav, task)
+            travel_energy = travel_dist * ENERGY_PER_METER
+            travel_time = travel_dist / UAV_SPEED
             if is_feasible_with_travel(uav, task,runtime):
-                uav.consume_resources(task)
-                runtime += task.hover_time + curr_distance(uav, task) / UAV_SPEED
+                uav.remaining_energy -= task.energy_cost + travel_energy
+                uav.remaining_hover_time -= task.hover_time + travel_time
+                uav.remaining_compute -= task.compute_load
+                runtime += task.hover_time + travel_time
+                uav.move_to(task)
                 task.completed = True
             else:
                 task.completed = False

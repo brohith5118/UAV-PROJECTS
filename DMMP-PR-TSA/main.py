@@ -74,7 +74,7 @@ np.random.seed(SEED)
 # STEP 1-3 : ENVIRONMENT SETUP
 # ==========================================================
 
-def setup_environment():
+def setup_environment(num_tasks=None, num_uavs=None):
 
     print("=" * 60)
     print("  DMMP-PR-TSA  |  UAV Remote Sensing Scheduler")
@@ -86,7 +86,7 @@ def setup_environment():
 
     print(f"\n[2] Sampling {NUM_TASKS} tasks from demand map...")
     tasks, _ = generate_tasks(
-        num_tasks           = NUM_TASKS,
+        num_tasks           = num_tasks if num_tasks is not None else NUM_TASKS,
         high_priority_ratio = HIGH_PRIORITY_RATIO,
         demand_map          = demand_map,
         seed                = SEED,
@@ -98,7 +98,7 @@ def setup_environment():
           f"(P1={p1}, P2={p2}, P3={p3})")
 
     print(f"\n[3] Generating {NUM_UAVS} heterogeneous UAVs...")
-    uavs = generate_uavs(num_uavs=NUM_UAVS, seed=UAV_SEED)
+    uavs = generate_uavs(num_uavs=num_uavs if num_uavs is not None else NUM_UAVS, seed=UAV_SEED)
     for uav in uavs:
         print(f"    {uav}")
 
@@ -303,13 +303,39 @@ def visualise(uavs, routes, tasks, demand_map, reward_logs, save_dir=None, prefi
     plot_reward_convergence(reward_logs, save_dir=save_dir, prefix=prefix)
 
 
+def update_final_route_resources(uavs):
+    from common.config import ENERGY_PER_METER, UAV_SPEED
+    import math
+
+    usage = {}
+    for uav in uavs:
+        current_x = uav.x
+        current_y = uav.y
+        used_energy = 0.0
+        used_hover = 0.0
+        used_compute = 0.0
+
+        for task in uav.assigned_tasks:
+            distance = math.hypot(current_x - task.x, current_y - task.y)
+            used_energy += task.energy_cost + distance * ENERGY_PER_METER
+            used_hover += task.hover_time + distance / UAV_SPEED
+            used_compute += task.compute_load
+            current_x = task.x
+            current_y = task.y
+
+        uav.remaining_energy = uav.max_energy - used_energy
+        uav.remaining_hover_time = uav.max_hover_time - used_hover
+        uav.remaining_compute = uav.max_compute - used_compute
+        usage[uav.uav_id] = (used_energy, used_hover, used_compute)
+
+    return usage
+
+
 # ==========================================================
 # MAIN
 # ==========================================================
 
-def main(optimize=True, save_dir=None, prefix=""):
-    import math
-    from common.config import ENERGY_PER_METER, UAV_SPEED
+def main(num_tasks=None, num_uavs=None, optimize=True, save_dir=None, prefix=""):
     from utils import (
         completion_rate,
         high_priority_completion_rate,
@@ -319,7 +345,7 @@ def main(optimize=True, save_dir=None, prefix=""):
     )
     start_time = time.perf_counter()
     # ---- Environment ----
-    demand_map, tasks, uavs = setup_environment()
+    demand_map, tasks, uavs = setup_environment(num_tasks=num_tasks, num_uavs=num_uavs)
 
     # ---- D-Module ----
     uavs, _unassigned = run_d_module(tasks, uavs)
@@ -336,7 +362,9 @@ def main(optimize=True, save_dir=None, prefix=""):
     report_metrics(uavs, tasks, routes)
 
     # ---- Visualise ----
-    visualise(uavs, routes, tasks, demand_map, reward_logs, save_dir=save_dir, prefix=prefix)
+    # visualise(uavs, routes, tasks, demand_map, reward_logs, save_dir=save_dir, prefix=prefix)
+
+    route_usage = update_final_route_resources(uavs)
 
     # Compute metrics
     cr  = completion_rate(uavs, tasks)
@@ -350,15 +378,7 @@ def main(optimize=True, save_dir=None, prefix=""):
     for u in uavs:
         if not u.active:
             continue
-        used_energy = sum(
-            t.energy_cost + ENERGY_PER_METER * math.hypot(u.x - t.x, u.y - t.y)
-            for t in u.assigned_tasks
-        )
-        used_hover = sum(
-            t.hover_time + math.hypot(u.x - t.x, u.y - t.y) / UAV_SPEED
-            for t in u.assigned_tasks
-        )
-        used_compute = sum(t.compute_load for t in u.assigned_tasks)
+        used_energy, used_hover, used_compute = route_usage[u.uav_id]
         if used_energy > u.max_energy or used_hover > u.max_hover_time or used_compute > u.max_compute:
             overloaded_count += 1
 
@@ -388,4 +408,4 @@ def main(optimize=True, save_dir=None, prefix=""):
 
 
 if __name__ == '__main__':
-    main()
+    main(20,5)

@@ -202,7 +202,7 @@ class PSOScheduler:
                 route.total_hover_time += task.hover_time + event.travel_time
                 route.total_compute += task.compute_load
                 route.finish_time = event.finish_time
-                priority_score += task.priority
+                priority_score += (4 - task.priority)
                 if event.finish_time > task.deadline:
                     deadline_violations += 1
                 scheduled = True
@@ -321,7 +321,7 @@ class PSOScheduler:
                 task.assigned_uav = uav.uav_id
                 task.start_time = event.start_time
                 task.finish_time = event.finish_time
-                task.completed = True
+                task.completed = event.finish_time <= task.deadline
                 uav.assigned_tasks.append(task)
                 uav.remaining_energy -= task.energy_cost + event.travel_energy
                 uav.remaining_hover_time -= task.hover_time + event.travel_time
@@ -355,4 +355,3 @@ class PSOScheduler:
 
         pso = scheduler or PSOScheduler()
         return pso.schedule(uavs, combined_tasks)
-

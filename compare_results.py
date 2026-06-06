@@ -1,262 +1,393 @@
+import argparse
+import contextlib
+import importlib.util
 import os
 import sys
-import importlib.util
-import pandas as pd
+from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import pandas as pd
 
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# --------------------------------------------------
+ROOT_DIR = Path(__file__).resolve().parent
+OUTPUT_DIR = ROOT_DIR / "comparison_outputs"
+PUBLICATION_GRAPH_DIR = OUTPUT_DIR / "publication_graphs"
+TABLE_DIR = OUTPUT_DIR / "tables"
+GRAPH_DIR = OUTPUT_DIR / "graphs"
 
-# Dynamic module loader
+TABLE_DIR.mkdir(parents=True, exist_ok=True)
+GRAPH_DIR.mkdir(parents=True, exist_ok=True)
+PUBLICATION_GRAPH_DIR.mkdir(parents=True, exist_ok=True)
 
-# --------------------------------------------------
 
-def load_main(folder_name):
-path = os.path.join(ROOT_DIR, folder_name, "main.py")
-
-```
-spec = importlib.util.spec_from_file_location(
-    folder_name.replace("-", "_"),
-    path
-)
-
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
-
-return module.main
-```
-
-# --------------------------------------------------
-
-# Load algorithms
-
-# --------------------------------------------------
-
-algorithms = {
-"DMMP-PR-TSA":
-load_main("DMMP-PR-TSA"),
-
-```
-"DMMP-R-RL-AC":
-    load_main("DMMP-R-RL-AC"),
-
-"Greedy":
-    load_main("Greedy-Nearest"),
-
-"PSO":
-    load_main("PSO"),
-```
-
+ALGORITHMS = {
+    "DMMP-PR-TSA": "DMMP-PR-TSA",
+    "DMMP-R-RL-AC": "DMMP-R-RL-AC",
+    "Greedy-Nearest": "Greedy-Nearest",
+    "PSO": "PSO",
 }
 
-# --------------------------------------------------
+METRICS = [
+    ("completion_rate", "Completion Rate"),
+    ("high_priority_completion_rate", "High Priority Completion Rate"),
+    ("runtime", "Runtime (seconds)"),
+]
 
-# Experiment 1
+ALGORITHM_COLORS = {
+    "DMMP-PR-TSA": "#1f77b4",
+    "DMMP-R-RL-AC": "#2ca02c",
+    "Greedy-Nearest": "#d62728",
+    "PSO": "#9467bd",
+}
 
-# Fixed UAVs
+LOCAL_MODULES = [
+    "main",
+    "scheduler",
+    "utils",
+    "visualization",
+    "pr_module",
+    "rl_agent",
+]
 
-# --------------------------------------------------
 
-TASK_COUNTS = [20, 40, 60, 80, 100]
-FIXED_UAVS = 4
+@contextlib.contextmanager
+def algorithm_import_context(folder_path):
+    """Temporarily put one algorithm folder first so same-named modules do not collide."""
+    original_path = list(sys.path)
+    removed_modules = {
+        name: sys.modules.pop(name)
+        for name in LOCAL_MODULES
+        if name in sys.modules
+    }
 
-results_tasks = []
+    sys.path.insert(0, str(folder_path))
+    sys.path.insert(0, str(ROOT_DIR))
+    try:
+        yield
+    finally:
+        for name in LOCAL_MODULES:
+            sys.modules.pop(name, None)
+        sys.modules.update(removed_modules)
+        sys.path[:] = original_path
 
-for task_count in TASK_COUNTS:
 
-```
-print(f"\nRunning task-count experiment: {task_count}")
+def load_algorithm_main(folder_name):
+    folder_path = ROOT_DIR / folder_name
+    main_path = folder_path / "main.py"
+    if not main_path.exists():
+        raise FileNotFoundError(f"Could not find main.py in {folder_path}")
 
-for algo_name, algo in algorithms.items():
+    module_name = f"comparison_{folder_name.replace('-', '_')}_main"
+    with algorithm_import_context(folder_path):
+        spec = importlib.util.spec_from_file_location(module_name, main_path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+        return module.main
 
-    print(f"   {algo_name}")
 
-    metrics = algo(
-        num_tasks=task_count,
-        num_uavs=FIXED_UAVS
-    )
+def normalize_metrics(metrics):
+    runtime = metrics.get("runtime", metrics.get("runtime_seconds", 0.0))
+    return {
+        "completion_rate": float(metrics.get("completion_rate", 0.0)),
+        "high_priority_completion_rate": float(
+            metrics.get("high_priority_completion_rate", 0.0)
+        ),
+        "runtime": float(runtime),
+    }
 
-    results_tasks.append({
-        "algorithm": algo_name,
-        "tasks": task_count,
-        "completion_rate":
-            metrics["completion_rate"],
-        "high_priority_completion_rate":
-            metrics["high_priority_completion_rate"],
-        "runtime":
-            metrics["runtime"],
-    })
-```
 
-df_tasks = pd.DataFrame(results_tasks)
+def call_algorithm(folder_name, num_tasks, num_uavs):
+    folder_path = ROOT_DIR / folder_name
+    main = load_algorithm_main(folder_name)
+    with algorithm_import_context(folder_path):
+        metrics = main(num_tasks=num_tasks, num_uavs=num_uavs)
+    return normalize_metrics(metrics)
 
-df_tasks.to_csv(
-"task_scalability.csv",
-index=False
-)
 
-# --------------------------------------------------
+def run_experiment(experiment_name, varying_label, varying_values, fixed_label, fixed_value):
+    rows = []
+    print(f"\n{'=' * 72}")
+    print(f"{experiment_name}: varying {varying_label}, fixed {fixed_label}={fixed_value}")
+    print(f"{'=' * 72}")
 
-# Experiment 2
+    for value in varying_values:
+        print(f"\nRunning {varying_label}={value}")
+        num_tasks = value if varying_label == "tasks" else fixed_value
+        num_uavs = value if varying_label == "uavs" else fixed_value
 
-# Fixed Tasks
+        for algorithm_name, folder_name in ALGORITHMS.items():
+            print(f"  {algorithm_name}")
+            metrics = call_algorithm(
+                folder_name=folder_name,
+                num_tasks=num_tasks,
+                num_uavs=num_uavs,
+            )
+            rows.append(
+                {
+                    "algorithm": algorithm_name,
+                    varying_label: value,
+                    "num_tasks": num_tasks,
+                    "num_uavs": num_uavs,
+                    **metrics,
+                }
+            )
 
-# --------------------------------------------------
+    return pd.DataFrame(rows)
 
-UAV_COUNTS = [2, 4, 6, 8, 10]
-FIXED_TASKS = 100
 
-results_uavs = []
+def save_metric_tables(df, varying_label, experiment_slug):
+    csv_path = TABLE_DIR / f"{experiment_slug}.csv"
+    html_path = TABLE_DIR / f"{experiment_slug}.html"
+    markdown_path = TABLE_DIR / f"{experiment_slug}.md"
 
-for uav_count in UAV_COUNTS:
+    df.to_csv(csv_path, index=False)
+    df.to_html(html_path, index=False, float_format=lambda value: f"{value:.4f}")
+    markdown_path.write_text(dataframe_to_markdown(df), encoding="utf-8")
 
-```
-print(f"\nRunning UAV-count experiment: {uav_count}")
+    for metric, _label in METRICS:
+        pivot = df.pivot(index=varying_label, columns="algorithm", values=metric)
+        pivot.to_csv(TABLE_DIR / f"{experiment_slug}_{metric}_pivot.csv")
+        (TABLE_DIR / f"{experiment_slug}_{metric}_pivot.md").write_text(
+            dataframe_to_markdown(pivot.reset_index()),
+            encoding="utf-8",
+        )
 
-for algo_name, algo in algorithms.items():
 
-    print(f"   {algo_name}")
+def dataframe_to_markdown(df):
+    def format_value(value):
+        if isinstance(value, float):
+            return f"{value:.4f}"
+        return str(value)
 
-    metrics = algo(
-        num_tasks=FIXED_TASKS,
-        num_uavs=uav_count
-    )
-
-    results_uavs.append({
-        "algorithm": algo_name,
-        "uavs": uav_count,
-        "completion_rate":
-            metrics["completion_rate"],
-        "high_priority_completion_rate":
-            metrics["high_priority_completion_rate"],
-        "runtime":
-            metrics["runtime"],
-    })
-```
-
-df_uavs = pd.DataFrame(results_uavs)
-
-df_uavs.to_csv(
-"uav_scalability.csv",
-index=False
-)
-
-# --------------------------------------------------
-
-# Plot helper
-
-# --------------------------------------------------
-
-def create_plot(
-dataframe,
-x_column,
-y_column,
-xlabel,
-ylabel,
-filename
-):
-
-```
-plt.figure(figsize=(8,5))
-
-for algo in dataframe["algorithm"].unique():
-
-    subset = dataframe[
-        dataframe["algorithm"] == algo
+    columns = [str(column) for column in df.columns]
+    lines = [
+        "| " + " | ".join(columns) + " |",
+        "| " + " | ".join(["---"] * len(columns)) + " |",
     ]
+    for _index, row in df.iterrows():
+        lines.append("| " + " | ".join(format_value(row[column]) for column in df.columns) + " |")
+    return "\n".join(lines) + "\n"
 
-    plt.plot(
-        subset[x_column],
-        subset[y_column],
-        marker="o",
-        label=algo
+
+def save_table_image(df, varying_label, experiment_slug):
+    display_df = df.copy()
+    for metric, _label in METRICS:
+        display_df[metric] = display_df[metric].map(lambda value: f"{value:.4f}")
+
+    columns = ["algorithm", varying_label, "completion_rate", "high_priority_completion_rate", "runtime"]
+    display_df = display_df[columns]
+
+    height = max(4, 0.35 * len(display_df) + 1)
+    fig, ax = plt.subplots(figsize=(12, height))
+    ax.axis("off")
+    table = ax.table(
+        cellText=display_df.values,
+        colLabels=display_df.columns,
+        loc="center",
+        cellLoc="center",
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(8)
+    table.scale(1, 1.25)
+    for (row, _col), cell in table.get_celld().items():
+        if row == 0:
+            cell.set_text_props(weight="bold")
+            cell.set_facecolor("#d9ead3")
+        elif row % 2 == 0:
+            cell.set_facecolor("#f6f8fa")
+    fig.tight_layout()
+    fig.savefig(TABLE_DIR / f"{experiment_slug}_table.png", dpi=200)
+    plt.close(fig)
+
+
+def create_metric_plot(
+    df,
+    varying_label,
+    metric,
+    ylabel,
+    experiment_slug,
+    fixed_label,
+    fixed_value,
+):
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    markers = {
+        "DMMP-PR-TSA": "o",
+        "DMMP-R-RL-AC": "s",
+        "Greedy-Nearest": "^",
+        "PSO": "D",
+    }
+
+    for algorithm in df["algorithm"].unique():
+
+        subset = (
+            df[df["algorithm"] == algorithm]
+            .sort_values(varying_label)
+        )
+
+        ax.plot(
+            subset[varying_label],
+            subset[metric],
+            color=ALGORITHM_COLORS.get(algorithm),
+            marker=markers.get(algorithm, "o"),
+            markersize=7,
+            linewidth=2.8,
+            label=algorithm,
+        )
+
+    ax.set_xlabel(
+        f"Number of {varying_label.title()}",
+        fontsize=13,
+        fontweight="bold",
     )
 
-plt.xlabel(xlabel)
-plt.ylabel(ylabel)
+    ax.set_ylabel(
+        ylabel,
+        fontsize=13,
+        fontweight="bold",
+    )
 
-plt.grid(True)
-plt.legend()
+    title = (
+        f"{ylabel} vs Number of {varying_label.title()}"
+        f"\n({fixed_label}={fixed_value})"
+    )
 
-plt.tight_layout()
-plt.savefig(filename)
-plt.close()
-```
+    ax.set_title(
+        title,
+        fontsize=14,
+        fontweight="bold",
+        pad=12,
+    )
 
-# --------------------------------------------------
+    ax.set_xticks(sorted(df[varying_label].unique()))
 
-# TASK SCALABILITY
+    ax.grid(
+        True,
+        linestyle="--",
+        linewidth=0.8,
+        alpha=0.6,
+    )
 
-# --------------------------------------------------
+    ax.tick_params(
+        axis="both",
+        labelsize=11,
+    )
 
-create_plot(
-df_tasks,
-"tasks",
-"completion_rate",
-"Number of Tasks",
-"Completion Rate",
-"completion_vs_tasks.png"
-)
+    if "rate" in metric:
+        ymax = max(df[metric].max() * 1.05, 1.0)
+        ax.set_ylim(0, ymax)
 
-create_plot(
-df_tasks,
-"tasks",
-"high_priority_completion_rate",
-"Number of Tasks",
-"High Priority Completion Rate",
-"high_priority_vs_tasks.png"
-)
+    legend = ax.legend(
+        fontsize=10,
+        frameon=True,
+        loc="best",
+    )
 
-create_plot(
-df_tasks,
-"tasks",
-"runtime",
-"Number of Tasks",
-"Runtime (seconds)",
-"runtime_vs_tasks.png"
-)
+    legend.get_frame().set_alpha(0.95)
 
-# --------------------------------------------------
+    plt.tight_layout()
 
-# UAV SCALABILITY
+    standard_path = GRAPH_DIR / f"{experiment_slug}_{metric}.png"
 
-# --------------------------------------------------
+    publication_path = (
+        PUBLICATION_GRAPH_DIR
+        / f"{experiment_slug}_{metric}_publication.png"
+    )
 
-create_plot(
-df_uavs,
-"uavs",
-"completion_rate",
-"Number of UAVs",
-"Completion Rate",
-"completion_vs_uavs.png"
-)
+    fig.savefig(
+        standard_path,
+        dpi=200,
+        bbox_inches="tight",
+    )
 
-create_plot(
-df_uavs,
-"uavs",
-"high_priority_completion_rate",
-"Number of UAVs",
-"High Priority Completion Rate",
-"high_priority_vs_uavs.png"
-)
+    try:
+        fig.savefig(
+            publication_path,
+            dpi=300,
+            bbox_inches="tight",
+        )
+    except OSError as exc:
+        print(f"Warning: could not save publication graph {publication_path}: {exc}")
 
-create_plot(
-df_uavs,
-"uavs",
-"runtime",
-"Number of UAVs",
-"Runtime (seconds)",
-"runtime_vs_uavs.png"
-)
+    plt.close(fig)
 
-print("\nFinished.")
-print("Generated:")
-print("  task_scalability.csv")
-print("  uav_scalability.csv")
-print("  completion_vs_tasks.png")
-print("  high_priority_vs_tasks.png")
-print("  runtime_vs_tasks.png")
-print("  completion_vs_uavs.png")
-print("  high_priority_vs_uavs.png")
-print("  runtime_vs_uavs.png")
+def save_outputs(df, varying_label, experiment_slug, fixed_label, fixed_value):
+    save_metric_tables(df, varying_label, experiment_slug)
+    save_table_image(df, varying_label, experiment_slug)
+    for metric, label in METRICS:
+        create_metric_plot(
+            df,
+            varying_label,
+            metric,
+            label,
+            experiment_slug,
+            fixed_label,
+            fixed_value,
+        )
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Compare UAV scheduling algorithms across task and UAV scalability experiments."
+    )
+    parser.add_argument("--task-counts", nargs="+", type=int, default=list(range(10, 101, 10)))
+    parser.add_argument("--uav-counts", nargs="+", type=int, default=list(range(3, 21)))
+    parser.add_argument("--fixed-uavs", type=int, default=5)
+    parser.add_argument("--fixed-tasks", type=int, default=30)
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    TABLE_DIR.mkdir(parents=True, exist_ok=True)
+    GRAPH_DIR.mkdir(parents=True, exist_ok=True)
+
+    task_df = run_experiment(
+        experiment_name="Task scalability",
+        varying_label="tasks",
+        varying_values=args.task_counts,
+        fixed_label="uavs",
+        fixed_value=args.fixed_uavs,
+    )
+    save_outputs(
+        task_df,
+        "tasks",
+        f"varying_tasks_static_{args.fixed_uavs}_uavs",
+        "uavs",
+        args.fixed_uavs,
+    )
+
+    uav_df = run_experiment(
+        experiment_name="UAV scalability",
+        varying_label="uavs",
+        varying_values=args.uav_counts,
+        fixed_label="tasks",
+        fixed_value=args.fixed_tasks,
+    )
+    save_outputs(
+        uav_df,
+        "uavs",
+        f"varying_uavs_static_{args.fixed_tasks}_tasks",
+        "tasks",
+        args.fixed_tasks,
+    )
+
+    combined_df = pd.concat([task_df, uav_df], ignore_index=True)
+    combined_df.to_csv(TABLE_DIR / "combined_comparison.csv", index=False)
+    combined_df.to_html(
+        TABLE_DIR / "combined_comparison.html",
+        index=False,
+        float_format=lambda value: f"{value:.4f}",
+    )
+
+    print("\nFinished comparison.")
+    print(f"Tables saved in: {TABLE_DIR}")
+    print(f"Graphs saved in: {GRAPH_DIR}")
+
+
+if __name__ == "__main__":
+    main()

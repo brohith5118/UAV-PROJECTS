@@ -223,6 +223,8 @@ def generate_uavs(num_uavs=NUM_UAVS, seed=99):
         # Depot near map edges (realistic launch pads)
         x = float(rng.uniform(0, MAP_WIDTH * GRID_RESOLUTION))
         y = float(rng.uniform(0, MAP_HEIGHT * GRID_RESOLUTION))
+        # x = 0
+        # y = 0
 
         uav_type = type_pool[uid]
 

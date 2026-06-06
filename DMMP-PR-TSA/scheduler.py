@@ -23,7 +23,12 @@ from common.config import (
     UAV_SPEED,
     MAP_WIDTH,
     MAP_HEIGHT,
+    GRID_RESOLUTION,
 )
+
+DEADLINE_MISS_PENALTY = 600.0
+TARDINESS_WEIGHT = 3.0
+HIGH_PRIORITY_DEADLINE_MULTIPLIER = 3.0
 
 
 # ----------------------------------------------------------
@@ -64,6 +69,90 @@ def estimate_route_cost(uav, tasks):
     return total_energy, total_hover, total_compute
 
 
+def estimate_route_timeline(uav, tasks):
+    current_x = uav.x
+    current_y = uav.y
+    clock = 0.0
+    timeline = []
+
+    for task in tasks:
+        dist = euclidean(current_x, current_y, task.x, task.y)
+        clock += dist / UAV_SPEED
+        clock += task.hover_time
+        timeline.append((task, clock))
+        current_x = task.x
+        current_y = task.y
+
+    return timeline
+
+
+def route_deadline_penalty(uav, tasks):
+    penalty = 0.0
+    violations = 0
+    for task, finish_time in estimate_route_timeline(uav, tasks):
+        if finish_time <= task.deadline:
+            continue
+        violations += 1
+        multiplier = HIGH_PRIORITY_DEADLINE_MULTIPLIER if task.priority == 1 else 1.0
+        penalty += multiplier * (
+            DEADLINE_MISS_PENALTY
+            + TARDINESS_WEIGHT * (finish_time - task.deadline)
+        )
+    return violations, penalty
+
+
+def route_is_resource_feasible(uav, tasks):
+    total_energy, total_hover, total_compute = estimate_route_cost(uav, tasks)
+    return (
+        total_energy <= uav.max_energy
+        and total_hover <= uav.max_hover_time
+        and total_compute <= uav.max_compute
+    )
+
+
+def best_task_insertion_route(uav, task):
+    if not uav.is_compatible(task):
+        return None
+
+    best_route = None
+    best_score = None
+    current_route = list(uav.assigned_tasks)
+
+    for insert_at in range(len(current_route) + 1):
+        candidate = current_route[:insert_at] + [task] + current_route[insert_at:]
+        if not route_is_resource_feasible(uav, candidate):
+            continue
+
+        total_energy, total_hover, _total_compute = estimate_route_cost(uav, candidate)
+        violations, deadline_penalty = route_deadline_penalty(uav, candidate)
+        score = (
+            violations,
+            deadline_penalty,
+            total_hover,
+            total_energy,
+        )
+        if best_score is None or score < best_score:
+            best_score = score
+            best_route = candidate
+
+    return best_route
+
+
+def deadline_aware_order(uav, tasks):
+    original_route = uav.assigned_tasks
+    uav.assigned_tasks = []
+
+    for task in sorted(tasks, key=lambda item: (item.deadline, item.priority, item.task_id)):
+        route = best_task_insertion_route(uav, task)
+        if route is None:
+            route = uav.assigned_tasks + [task]
+        uav.assigned_tasks = route
+
+    ordered_route = uav.assigned_tasks
+    uav.assigned_tasks = original_route
+    return ordered_route
+
+
 # ----------------------------------------------------------
 # REGION CENTROID UPDATE
 # ----------------------------------------------------------
@@ -99,34 +188,15 @@ def is_feasible(uav, task):
     type-compatibility constraint (eq 13).
     """
 
-    if not uav.is_compatible(task):
-        return False
-
-    tentative_tasks = uav.assigned_tasks + [task]
-
-    total_energy, total_hover, total_compute = (
-        estimate_route_cost(uav, tentative_tasks)
-    )
-    used_hover   = sum(t.hover_time  for t in uav.assigned_tasks)
-    used_compute = sum(t.compute_load for t in uav.assigned_tasks)
-
-    if total_energy > uav.max_energy:
-        return False
-
-    if total_hover > uav.max_hover_time:
-        return False
-
-    if total_compute > uav.max_compute:
-        return False
-
-    return True
+    return best_task_insertion_route(uav, task) is not None
 
 
 # ----------------------------------------------------------
 # GENERALIZED COST FUNCTION
 # ----------------------------------------------------------
 
-def generalized_cost(uav, task, avg_tasks):
+def generalized_cost(uav, task, avg_tasks, candidate_route=None):
+    candidate_route = uav.assigned_tasks + [task] if candidate_route is None else candidate_route
 
     distance = euclidean(
         uav.region_x,
@@ -136,7 +206,10 @@ def generalized_cost(uav, task, avg_tasks):
     )
 
     # NORMALIZED DISTANCE
-    map_diag = math.hypot(MAP_WIDTH, MAP_HEIGHT)
+    map_diag = math.hypot(
+        MAP_WIDTH * GRID_RESOLUTION,
+        MAP_HEIGHT * GRID_RESOLUTION,
+    )
     norm_distance = distance / map_diag
 
     # NORMALIZED PRIORITY
@@ -146,14 +219,14 @@ def generalized_cost(uav, task, avg_tasks):
         3: 0.2
     }[task.priority]
 
-    load_ratio = (len(uav.assigned_tasks) / max(avg_tasks, 1))
+    # load_ratio = (len(uav.assigned_tasks) / max(avg_tasks, 1))
 
-    load_penalty = load_ratio
+    # load_penalty = load_ratio
 
     total_energy, total_hover, total_compute = (
         estimate_route_cost(
             uav,
-            uav.assigned_tasks
+            candidate_route
         )
     )
 
@@ -172,6 +245,7 @@ def generalized_cost(uav, task, avg_tasks):
         + hover_ratio
         + compute_ratio
     )
+    _violations, deadline_penalty = route_deadline_penalty(uav, candidate_route)
 
     # LAGRANGE PENALTY
     lagrange_penalty = (
@@ -183,8 +257,9 @@ def generalized_cost(uav, task, avg_tasks):
 
     total_cost = (
         ALPHA * norm_distance
-        + 10.0 * load_penalty
+        # + 10.0 * load_penalty
         + 2.0 * resource_penalty
+        + deadline_penalty
         + lagrange_penalty
         - GAMMA * priority_reward
     )
@@ -310,6 +385,7 @@ def assign_tasks(task_list, uavs):
     sorted_tasks = sorted(
         task_list,
         key=lambda t: (
+            t.deadline,
             t.priority,
             -(t.energy_cost +
               t.hover_time +
@@ -350,13 +426,15 @@ def assign_tasks(task_list, uavs):
                 if not uav.active:
                     continue
 
-                if not is_feasible(uav, task):
+                candidate_route = best_task_insertion_route(uav, task)
+                if candidate_route is None:
                     continue
 
                 cost = generalized_cost(
                     uav,
                     task,
-                    avg_tasks
+                    avg_tasks,
+                    candidate_route
                 )
 
                 cost += compactness_penalty(
@@ -365,7 +443,7 @@ def assign_tasks(task_list, uavs):
                 )
 
                 feasible_candidates.append(
-                    (cost, uav)
+                    (cost, uav, candidate_route)
                 )
 
             if feasible_candidates:
@@ -374,9 +452,9 @@ def assign_tasks(task_list, uavs):
                     key=lambda x: x[0]
                 )
 
-                best_uav = feasible_candidates[0][1]
+                _best_cost, best_uav, best_route = feasible_candidates[0]
 
-                best_uav.assigned_tasks.append(task)
+                best_uav.assigned_tasks = best_route
                 
 
             else:
@@ -411,9 +489,14 @@ def assign_tasks(task_list, uavs):
             )
             break
 
-    # GREEDY ROUTE INITIALIZATION
+    # DEADLINE-AWARE ROUTE FINALIZATION
     for uav in uavs:
-        nearest_neighbor_order(uav)
+        candidate_route = deadline_aware_order(uav, uav.assigned_tasks)
+        if (
+            len(candidate_route) == len(uav.assigned_tasks)
+            and route_is_resource_feasible(uav, candidate_route)
+        ):
+            uav.assigned_tasks = candidate_route
 
     # RESET RESOURCES
     for uav in uavs:
@@ -537,9 +620,6 @@ def _print_partitioning_summary(uavs, unassigned):
             uav,
             uav.assigned_tasks
         )
-        th = sum(t.hover_time   for t in uav.assigned_tasks)
-        tf = sum(t.compute_load for t in uav.assigned_tasks)
-
         hp = sum(
             1
             for t in uav.assigned_tasks
