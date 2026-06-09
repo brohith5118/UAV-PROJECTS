@@ -377,4 +377,4 @@ def main(num_tasks=None, num_uavs=None, optimize=True, save_dir=None, prefix="")
 
 
 if __name__ == '__main__':
-    main(40, 5)
+    main(50, 5)

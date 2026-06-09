@@ -1,9 +1,11 @@
-import os
-import sys
 
-ROOT_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..")
-)
+        uavs,
+        tasks,
+        demand_map,
+        result,
+        prefix="pso_"
+    )
 
-if ROOT_DIR not in sys.path:
-    sys.path.insert(0, ROOT_DIR)
+    print("\nGenerated graphs")
+    for path in saved_graphs:
+        print(f"  {path}")

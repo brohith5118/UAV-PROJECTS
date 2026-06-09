@@ -28,6 +28,7 @@ ALGORITHMS = {
     "DMMP-R-RL-AC": "DMMP-R-RL-AC",
     "Greedy-Nearest": "Greedy-Nearest",
     "PSO": "PSO",
+    "DPSO": "DPSO",
 }
 
 METRICS = [
@@ -41,6 +42,15 @@ ALGORITHM_COLORS = {
     "DMMP-R-RL-AC": "#2ca02c",
     "Greedy-Nearest": "#d62728",
     "PSO": "#9467bd",
+    "DPSO": "#8c564b",
+}
+
+ALGORITHM_MARKERS = {
+    "DMMP-PR-TSA": "o",
+    "DMMP-R-RL-AC": "s",
+    "Greedy-Nearest": "^",
+    "PSO": "D",
+    "DPSO": "P",
 }
 
 LOCAL_MODULES = [
@@ -213,16 +223,11 @@ def create_metric_plot(
     fixed_label,
     fixed_value,
 ):
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(11.5, 6.8))
 
-    markers = {
-        "DMMP-PR-TSA": "o",
-        "DMMP-R-RL-AC": "s",
-        "Greedy-Nearest": "^",
-        "PSO": "D",
-    }
-
-    for algorithm in df["algorithm"].unique():
+    for algorithm in ALGORITHMS:
+        if algorithm not in set(df["algorithm"]):
+            continue
 
         subset = (
             df[df["algorithm"] == algorithm]
@@ -233,9 +238,9 @@ def create_metric_plot(
             subset[varying_label],
             subset[metric],
             color=ALGORITHM_COLORS.get(algorithm),
-            marker=markers.get(algorithm, "o"),
-            markersize=7,
-            linewidth=2.8,
+            marker=ALGORITHM_MARKERS.get(algorithm, "o"),
+            markersize=7.5,
+            linewidth=2.6,
             label=algorithm,
         )
 
@@ -282,14 +287,16 @@ def create_metric_plot(
         ax.set_ylim(0, ymax)
 
     legend = ax.legend(
-        fontsize=10,
+        fontsize=9.5,
         frameon=True,
-        loc="best",
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.14),
+        ncol=min(len(ALGORITHMS), 5),
     )
 
     legend.get_frame().set_alpha(0.95)
 
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0.06, 1, 1])
 
     standard_path = GRAPH_DIR / f"{experiment_slug}_{metric}.png"
 
@@ -337,7 +344,7 @@ def parse_args():
     parser.add_argument("--task-counts", nargs="+", type=int, default=list(range(10, 101, 10)))
     parser.add_argument("--uav-counts", nargs="+", type=int, default=list(range(3, 21)))
     parser.add_argument("--fixed-uavs", type=int, default=5)
-    parser.add_argument("--fixed-tasks", type=int, default=30)
+    parser.add_argument("--fixed-tasks", type=int, default=50)
     return parser.parse_args()
 
 

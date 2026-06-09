@@ -160,7 +160,7 @@ def main(num_tasks=NUM_TASKS, num_uavs=NUM_UAVS, high_priority_ratio=HIGH_PRIORI
     return calculate_return_metrics(uavs, tasks, runtime)
 
 if __name__ == "__main__":
-    results = main(10, 3)
+    results = main(20, 5)
     print("\nSummary of Results:")
     print(f"Overall Task Completion Rate: {results['completion_rate']:.2%}")
     print(f"High Priority Task Completion Rate: {results['high_priority_completion_rate']:.2%}")

@@ -99,6 +99,8 @@ def calculate_reward(
     # Clip to avoid negative ratio breaking reward signal
     c_ratio  = max(c_ratio, -1.0)
 
+    norm_dist = dist / 1000.0  # normalise distance to km scale
+
     reward = (
         cd * dist
         + cp * pri

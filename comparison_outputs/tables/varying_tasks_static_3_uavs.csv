@@ -1,0 +1,6 @@
+algorithm,tasks,num_tasks,num_uavs,completion_rate,high_priority_completion_rate,runtime
+DMMP-PR-TSA,5,5,3,1.0,1.0,0.03391300002112985
+DMMP-R-RL-AC,5,5,3,1.0,1.0,0.21974249999038875
+Greedy-Nearest,5,5,3,1.0,1.0,0.006551900180056691
+PSO,5,5,3,1.0,1.0,3.2003013999201357
+DPSO,5,5,3,1.0,1.0,4.686920800013468

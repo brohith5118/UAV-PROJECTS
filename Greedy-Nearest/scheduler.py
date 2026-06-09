@@ -79,7 +79,7 @@ def establish_path(tasks,uavs):
 
         uav.assigned_tasks.sort(
             key=lambda task: task.priority,
-            reverse=True
+            reverse=False
         )
 
 def run_path(uavs):

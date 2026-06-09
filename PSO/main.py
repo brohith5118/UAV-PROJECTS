@@ -269,17 +269,17 @@ def main(num_tasks=NUM_TASKS, num_uavs=NUM_UAVS):
     print_summary(result, tasks, uavs, label="PSO")
     print_routes(result)
 
-    # saved_graphs = save_all_graphs(
-    #     uavs,
-    #     tasks,
-    #     demand_map,
-    #     result,
-    #     prefix="pso_"
-    # )
+    saved_graphs = save_all_graphs(
+        uavs,
+        tasks,
+        demand_map,
+        result,
+        prefix="pso_"
+    )
 
-    # print("\nGenerated graphs")
-    # for path in saved_graphs:
-    #     print(f"  {path}")
+    print("\nGenerated graphs")
+    for path in saved_graphs:
+        print(f"  {path}")
 
     runtime = time.perf_counter() - start
     metrics = compute_metrics(result, tasks, uavs)
@@ -296,4 +296,4 @@ def main(num_tasks=NUM_TASKS, num_uavs=NUM_UAVS):
 
 
 if __name__ == "__main__":
-    main(40, 5)
+    main(100, 5)
