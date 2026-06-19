@@ -25,6 +25,9 @@ from common.config import (
     HIGH_PRIORITY_RATIO,
     PRIORITY_DEADLINES,
     TASK_TYPE_RATIO,
+    TASK_ENERGY_COST,
+    TASK_HOVER_TIME,
+    TASK_COMPUTE_LOAD,
     MIN_ENERGY,
     MAX_ENERGY,
     MIN_HOVER_TIME,
@@ -169,11 +172,9 @@ def generate_tasks(num_tasks=NUM_TASKS,high_priority_ratio=HIGH_PRIORITY_RATIO,d
         # ω(g_i) workload vector
         # Energy cost includes travel component (proportional
         # to demand; exact distance added per UAV in scheduler)
-        energy_cost  = float(rng.uniform(200, 500))
-        hover_time   = float(rng.uniform(40, 100))
-        compute_load = (
-            float(rng.uniform(5, 20)) if task_type >= 0 else 0.0
-        )
+        energy_cost  = TASK_ENERGY_COST[task_type]
+        hover_time   = TASK_HOVER_TIME[task_type]
+        compute_load = TASK_COMPUTE_LOAD[task_type]
 
         deadline = PRIORITY_DEADLINES[priority]
 

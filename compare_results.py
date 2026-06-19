@@ -53,6 +53,7 @@ ALGORITHM_MARKERS = {
     "DPSO": "P",
 }
 
+
 LOCAL_MODULES = [
     "main",
     "scheduler",

@@ -8,8 +8,8 @@
 # ---------------------------------------------------------
 # MAP / GRID SETTINGS
 # ---------------------------------------------------------
-SEED = 150
-UAV_SEED = 150
+SEED = 5
+UAV_SEED = 6
 MAP_WIDTH  = 100
 MAP_HEIGHT = 100
 
@@ -36,6 +36,11 @@ PRIORITY_DEADLINES = {
 #  0  acquisition + light compute
 #  1  integrated acquisition+processing (compute-intensive)
 TASK_TYPE_RATIO = {-1: 0.4, 0: 0.3, 1: 0.3}
+
+TASK_ENERGY_COST = {-1: 500,0: 350,1: 200}
+TASK_HOVER_TIME = {-1: 100,0: 70,1: 50}
+TASK_COMPUTE_LOAD = {-1: 0,0: 5,1: 20}
+
 
 # ---------------------------------------------------------
 # UAV FLEET SETTINGS

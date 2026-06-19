@@ -1,13 +1,6 @@
-# =========================================================
-# MAIN  –  DMMP-R-RL-AC Proposed Pipeline
-#
-# Execution flow using Heuristic-Guided Rollout RL & RC-KMeans++
-# =========================================================
-
-import sys
 import os
-import random
-import numpy as np
+import sys
+
 import time
 
 ROOT_DIR = os.path.abspath(
@@ -16,17 +9,10 @@ ROOT_DIR = os.path.abspath(
 
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
-
-# Add parent directory to path so we can import root modules
-parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
-
-from common.environment import generate_demand_map, generate_tasks, generate_uavs, generate_new_task
-from scheduler import assign_tasks
-from utils import print_mission_metrics
-from visualization import plot_all, plot_reward_convergence
-
+    
+from common.environment  import generate_demand_map, generate_tasks, generate_uavs, generate_new_task
+from scheduler    import assign_tasks
+from rl_agent     import QLearningPlanner
 from common.config import (
     SEED,
     UAV_SEED,
@@ -35,37 +21,58 @@ from common.config import (
     NUM_UAVS,
     EPOCHS,
     ENABLE_DYNAMIC_EVENTS,
+    UAV_SPEED,
+    ENERGY_PER_METER
 )
 
-from pr_module import (
-    preassign,
-    reassign_new_tasks,
-    reassign_after_location_update,
-    reassign_after_uav_failure,
-    cancel_tasks,
-)
-from rl_agent import run_tsa_for_fleet, QLearningTrajectoryPlanner
+def distance_to(task, uav):
+    return ((uav.curr_x - task.x)**2 + (uav.curr_y - task.y)**2)**0.5
 
-random.seed(SEED)
-np.random.seed(SEED)
+def consume_resources(task, uav):
+    travel_energy = distance_to(task, uav) * ENERGY_PER_METER
+    travel_time   = distance_to(task,uav) / UAV_SPEED
+    uav.remaining_energy     -= task.energy_cost + travel_energy
+    uav.remaining_hover_time -= travel_time + task.hover_time
+    uav.remaining_compute    -= task.compute_load
 
 
-# ==========================================================
-# STEP 1-3 : ENVIRONMENT SETUP
-# ==========================================================
+def move_to(task, uav):
+    uav.curr_x = task.x
+    uav.curr_y = task.y
+    consume_resources(task, uav)
 
-def setup_environment(num_tasks=None, num_uavs=None):
+def is_feasible(task, uav):
+    travel_energy = distance_to(task, uav) * ENERGY_PER_METER
+    travel_time   = distance_to(task, uav) / UAV_SPEED
+    remaining_energy = uav.remaining_energy
+    remaining_hover_time = uav.remaining_hover_time
+    remaining_compute = uav.remaining_compute
+    remaining_energy     -= task.energy_cost + travel_energy
+    remaining_hover_time -= travel_time + task.hover_time
+    remaining_compute    -= task.compute_load
+
+    if(remaining_energy < 0 or remaining_hover_time < 0 or remaining_compute < 0):
+        return False
+    
+    current_time = uav.max_hover_time - uav.remaining_hover_time
+    if(current_time + travel_time + task.hover_time > task.deadline):
+        return False
+    
+    return True
+
+def setup_environment(num_tasks=NUM_TASKS, num_uavs=NUM_UAVS):
+
     print("=" * 60)
-    print("  Proposed R-RL-AC  |  UAV Remote Sensing Scheduler")
+    print("  DMMP-PR-TSA  |  UAV Remote Sensing Scheduler")
     print("=" * 60)
 
     print("\n[1] Generating sensing-demand map...")
     demand_map = generate_demand_map(seed=SEED)
     print(f"    Map size : {demand_map.shape[1]} × {demand_map.shape[0]} cells")
 
-    print(f"\n[2] Sampling {NUM_TASKS} tasks from demand map...")
+    print(f"\n[2] Sampling {num_tasks} tasks from demand map...")
     tasks, _ = generate_tasks(
-        num_tasks           = num_tasks if num_tasks is not None else NUM_TASKS,
+        num_tasks           = num_tasks,
         high_priority_ratio = HIGH_PRIORITY_RATIO,
         demand_map          = demand_map,
         seed                = SEED,
@@ -76,305 +83,98 @@ def setup_environment(num_tasks=None, num_uavs=None):
     print(f"    Tasks : {len(tasks)}  "
           f"(P1={p1}, P2={p2}, P3={p3})")
 
-    print(f"\n[3] Generating {NUM_UAVS} heterogeneous UAVs...")
-    uavs = generate_uavs(num_uavs=num_uavs if num_uavs is not None else NUM_UAVS, seed=UAV_SEED)
+    print(f"\n[3] Generating {num_uavs} heterogeneous UAVs...")
+    uavs = generate_uavs(num_uavs=num_uavs, seed=UAV_SEED)
     for uav in uavs:
         print(f"    {uav}")
 
     return demand_map, tasks, uavs
 
+def run_scheduler(tasks, uavs):
+    print('='*60)
+    print("Running D-module Region Partioning")
+    print('='*60)
 
-# ==========================================================
-# STEP 4 : D-MODULE  –  Region Partitioning (Run and print to match baseline structure)
-# ==========================================================
+    uavs, unassigned_tasks = assign_tasks(tasks, uavs)
 
-def run_d_module(tasks, uavs):
-    print("\n[4] D-MODULE: Capacity-Constrained Region Partitioning")
-    print("    Running power-diagram optimisation with Lagrange multipliers...")
+    print(f"Total tasks assigned: {len(tasks) - len(unassigned_tasks)}/{len(tasks)}\n")
 
-    uavs, unassigned = assign_tasks(tasks, uavs)
-
-    assigned_count = sum(len(u.assigned_tasks) for u in uavs)
-    print(f"    Assigned : {assigned_count}/{len(tasks)} tasks")
-    if unassigned:
-        print(f"    Unassigned (capacity overflow): {len(unassigned)} tasks")
-
-    return uavs, unassigned
-
-
-# ==========================================================
-# STEP 5 : PR-MODULE  –  RC-KMeans Pre-Assignment
-# ==========================================================
-
-def run_pr_module(tasks, uavs, optimize=True):
-    print("\n[5] PR-MODULE: Proposed RC-KMeans Assignment")
-    
-    # Reset task assignments
-    for t in tasks:
-        t.assigned_uav = None
-
-    uavs = preassign(tasks, uavs)
-    return uavs
-
-
-# ==========================================================
-# STEP 6 : TSA-MODULE  –  Rollout RL Sequence Optimisation
-# ==========================================================
-
-def run_tsa_module(uavs, optimize=True):
-    print("\n[6] TSA-MODULE: Proposed Rollout RL Task Sequence Adjustment")
-    print(f"    Evaluating lookahead policy instantly per UAV...")
-
-    reward_logs = {}
-    all_routes  = {}
-
+    print("Task Allocation:")
     for uav in uavs:
-        if not uav.active or not uav.assigned_tasks:
-            all_routes[uav.uav_id]  = []
-            reward_logs[uav.uav_id] = []
-            continue
+        print(f"{uav.uav_id}:{[task.task_id for task in uav.assigned_tasks]}")
 
-        print(f"    UAV {uav.uav_id:02d} "
-              f"({len(uav.assigned_tasks)} tasks, "
-              f"type {uav.uav_type:+d})...", end=' ')
-
-        planner = QLearningTrajectoryPlanner(uav, uav.assigned_tasks, optimize=optimize)
-        # Returns rollout rewards replicated over epochs
-        logs    = planner.train(epochs=EPOCHS, verbose=False)
-
-        route   = planner.get_best_route()
-        if optimize:
-            route   = planner.reorder_by_deadline(route)
-
-        uav.assigned_tasks = route
-        all_routes[uav.uav_id]  = route
-        reward_logs[uav.uav_id] = logs
-        print(f"done  (best reward={planner._best_reward:.1f})")
-
-    return all_routes, reward_logs
-
-
-# ==========================================================
-# STEP 7 : DYNAMIC EVENTS
-# ==========================================================
-
-def simulate_dynamic_events(tasks, uavs, demand_map, optimize=True):
-    """
-    Simulate dynamic events and run RC-KMeans + Rollout RL.
-    """
-    if not ENABLE_DYNAMIC_EVENTS:
-        print("\n[7] Dynamic events: DISABLED (set ENABLE_DYNAMIC_EVENTS=True)")
-        routes, logs = run_tsa_module(uavs, optimize=optimize)
-        return routes, logs, []
-
-    event_log = []
-
-    # -------------------------------------------------------
-    # EVENT (a): New urgent task insertion
-    # -------------------------------------------------------
-    print("\n[7a] DYNAMIC EVENT: New urgent task insertion")
-    next_id    = max(t.task_id for t in tasks) + 1
-    new_tasks  = [
-        generate_new_task(next_id + i, demand_map, seed=SEED + 100 + i)
-        for i in range(3)
-    ]
-    for t in new_tasks:
-        print(f"     Inserting {t}")
-
-    uavs = reassign_new_tasks(new_tasks, uavs, optimize=optimize)
-    tasks.extend(new_tasks)
-    event_log.append(('new_task_insertion', len(new_tasks)))
-
-    routes_a, logs_a = run_tsa_module(uavs, optimize=optimize)
-    print("    TSA re-optimised after new task insertion.")
-
-    # -------------------------------------------------------
-    # EVENT (b): Task location update
-    # -------------------------------------------------------
-    print("\n[7b] DYNAMIC EVENT: Task location update")
-    assigned_tasks_flat = [
-        t for u in uavs for t in u.assigned_tasks
-    ]
-    if assigned_tasks_flat:
-        update_target = random.choice(assigned_tasks_flat)
-        old_pos = (update_target.x, update_target.y)
-        update_target.x = min(
-            update_target.x + random.uniform(3, 8), 49.0
-        )
-        update_target.y = min(
-            update_target.y + random.uniform(3, 8), 49.0
-        )
-        print(
-            f"     Task {update_target.task_id} "
-            f"moved {old_pos} -> "
-            f"({update_target.x:.1f},{update_target.y:.1f})"
-        )
-        uavs = reassign_after_location_update([update_target], uavs, optimize=optimize)
-        event_log.append(('location_update', update_target.task_id))
-
-    routes_b, logs_b = run_tsa_module(uavs, optimize=optimize)
-    print("    TSA re-optimised after location update.")
-
-    # -------------------------------------------------------
-    # EVENT (c): UAV failure
-    # -------------------------------------------------------
-    print("\n[7c] DYNAMIC EVENT: UAV failure simulation")
-    active_uavs = [u for u in uavs if u.active and u.assigned_tasks]
-    if len(active_uavs) > 2:
-        failed_uav = random.choice(active_uavs[1:])  # never fail UAV 0
-        print(f"     UAV {failed_uav.uav_id} has failed!")
-        uavs = reassign_after_uav_failure(failed_uav, uavs, optimize=optimize)
-        event_log.append(('uav_failure', failed_uav.uav_id))
-
-    routes_final, logs_final = run_tsa_module(uavs, optimize=optimize)
-    print("    TSA re-optimised after UAV failure.")
-
-    return routes_final, logs_final, event_log
-
-
-# ==========================================================
-# STEP 8 : METRICS
-# ==========================================================
-
-def report_metrics(uavs, tasks, routes):
-    print("\n[8] MISSION METRICS")
-    print_mission_metrics(uavs, tasks)
-
-    print("    Per-UAV task breakdown:")
-    for uav in uavs:
-        route = routes.get(uav.uav_id, [])
-        tag   = "(FAILED)" if not uav.active else ""
-        print(
-            f"      UAV {uav.uav_id:02d} {tag}: "
-            f"{len(uav.assigned_tasks)} assigned, "
-            f"{len(route)} in final route"
-        )
-
-
-# ==========================================================
-# STEP 9 : VISUALISE
-# ==========================================================
-
-def visualise(uavs, routes, tasks, demand_map, reward_logs, save_dir=None, prefix=""):
-    print("\n[9] Generating visualisations...")
-    plot_all(uavs, routes, tasks, demand_map, save_dir=save_dir, prefix=prefix)
-    plot_reward_convergence(reward_logs, save_dir=save_dir, prefix=prefix)
-
-
-def update_final_route_resources(uavs):
-    from common.config import ENERGY_PER_METER, UAV_SPEED
-    import math
-
-    usage = {}
-    for uav in uavs:
-        current_x = uav.x
-        current_y = uav.y
-        used_energy = 0.0
-        used_hover = 0.0
-        used_compute = 0.0
-
-        for task in uav.assigned_tasks:
-            distance = math.hypot(current_x - task.x, current_y - task.y)
-            used_energy += task.energy_cost + distance * ENERGY_PER_METER
-            used_hover += task.hover_time + distance / UAV_SPEED
-            used_compute += task.compute_load
-            current_x = task.x
-            current_y = task.y
-
-        uav.remaining_energy = uav.max_energy - used_energy
-        uav.remaining_hover_time = uav.max_hover_time - used_hover
-        uav.remaining_compute = uav.max_compute - used_compute
-        usage[uav.uav_id] = (used_energy, used_hover, used_compute)
-
-    return usage
-
-
-# ==========================================================
-# MAIN EXECUTION ROUTINE
-# ==========================================================
-
-def main(num_tasks=None, num_uavs=None, optimize=True, save_dir=None, prefix=""):
-    from utils import (
-        completion_rate,
-        high_priority_completion_rate,
-        total_travel_distance,
-        energy_utilisation,
-        compute_utilisation,
-    )
-    start = time.perf_counter()
-    demand_map, tasks, uavs = setup_environment(num_tasks=num_tasks, num_uavs=num_uavs)
-
-    print(f"Tasks generated: {len(tasks)}")
-    print(f"UAVs generated: {len(uavs)}")
-
-    print("First task:")
-    print(tasks[0])
-
-    print("First UAV:")
-    print(
-        uavs[0].x,
-        uavs[0].y,
-        uavs[0].max_hover_time,
-        uavs[0].max_energy
-    )
-
-    # Run D-Module (partitioning output format compatibility)
-    uavs, _unassigned = run_d_module(tasks, uavs)
-
-    # Run Proposed PR-Module (RC-KMeans)
-    # uavs = run_pr_module(tasks, uavs, optimize=optimize)
-
-    # Run Proposed TSA-Module (Rollout RL) + dynamic event handling
-    routes, reward_logs, event_log = simulate_dynamic_events(
-        tasks, uavs, demand_map, optimize=optimize
-    )
-
-    report_metrics(uavs, tasks, routes)
-
-    # visualise(uavs, routes, tasks, demand_map, reward_logs, save_dir=save_dir, prefix=prefix)
-
-    route_usage = update_final_route_resources(uavs)
-
-    # Calculate final metrics
-    cr  = completion_rate(uavs, tasks)
-    hcr = high_priority_completion_rate(uavs,tasks)
-    td  = total_travel_distance(uavs)
-    eu  = energy_utilisation(uavs)
-    cu  = compute_utilisation(uavs)
-
-    # Check overloaded count
-    overloaded_count = 0
-    for u in uavs:
-        if not u.active:
-            continue
-        used_energy, used_hover, used_compute = route_usage[u.uav_id]
-        if used_energy > u.max_energy or used_hover > u.max_hover_time or used_compute > u.max_compute:
-            overloaded_count += 1
-
-    # Jain's fairness index
-    active_uavs = [u for u in uavs if u.active]
-    x_i = [len(u.assigned_tasks) for u in active_uavs]
-    if x_i and sum(x_i) > 0:
-        n_active = len(x_i)
-        jains_index = (sum(x_i) ** 2) / (n_active * sum(val ** 2 for val in x_i))
+    print("\nUnassigned Tasks:")
+    if(len(unassigned_tasks) == 0):
+        print("None\n")
     else:
-        jains_index = 0.0
+        print(f"{[task.task_id for task in unassigned_tasks]}\n")
 
-    run_time = time.perf_counter() - start
-    print(f"\nTotal execution time: {run_time:.2f} seconds")
+    for uav in uavs:
+        compute = sum(t.compute_load for t in uav.assigned_tasks)
+        hover = sum(t.hover_time for t in uav.assigned_tasks)
+        energy = sum(t.energy_cost for t in uav.assigned_tasks)
+
+        print(
+            f"UAV {uav.uav_id}: "
+            f"E={energy:.1f}/{uav.max_energy:.1f}, "
+            f"H={hover:.1f}/{uav.max_hover_time:.1f}, "
+            f"C={compute:.1f}/{uav.max_compute:.1f}"
+        )
+    return uavs, unassigned_tasks
+
+def find_path(uavs):
+    all_routes = []
+    for uav in uavs:
+        planner = QLearningPlanner(uav)
+        planner.train(episodes = 500)
+        route = planner.extract_route()
+        all_routes.append(route)
+        print(f"\nUAV {uav.uav_id} Route:")
+        print([task.task_id for task in route])
+    return all_routes
+
+def main(num_tasks=NUM_TASKS, num_uavs=NUM_UAVS, optimize=True, save_dir=None, prefix=""):
+    start = time.perf_counter()
+
+    demand_map, tasks, uavs = setup_environment(num_tasks=num_tasks, num_uavs=num_uavs)
+    uavs, unassigned_tasks = run_scheduler(tasks, uavs)
+    all_routes = find_path(uavs)
+
+    for uav, route in zip(uavs, all_routes):
+        for task in route:
+            if not is_feasible(task, uav):
+                task.completed = False
+                continue
+            move_to(task, uav)
+            task.completed = True
+    
+    completed_tasks = 0
+    total_tasks = len(tasks)
+    high_priority_completed_tasks = 0
+    total_high_priority_tasks = 0
+    for task in tasks:
+        if task.completed:
+            completed_tasks += 1
+            if task.priority == 1:
+                high_priority_completed_tasks += 1
+        if task.priority == 1:
+            total_high_priority_tasks += 1
+    
+    completion_rate = completed_tasks / total_tasks
+    high_priority_completion_rate = high_priority_completed_tasks / total_high_priority_tasks
+    runtime = time.perf_counter() - start
+
+    print(f"Task Completion Rate = {completion_rate * 100}%")
+    print(f"High Priority Task Completion Rate = {high_priority_completion_rate * 100}%")
+    print(f"Total Runtime for the algorithm = {runtime}(secs)")
+
     metrics = {
-        "completion_rate": cr,
-        "high_priority_completion_rate": hcr,
-        "total_travel_distance": td,
-        "energy_utilisation": eu,
-        "compute_utilisation": cu,
-        "overloaded_uav_count": overloaded_count,
-        "jains_fairness_index": jains_index,
-        "runtime": run_time
+        "completion_rate": completion_rate,
+        "high_priority_completion_rate": high_priority_completion_rate,
+        "runtime": runtime,
     }
 
     return metrics
 
-
 if __name__ == '__main__':
-    main(50, 5)
+    main(num_tasks=50,num_uavs=9)

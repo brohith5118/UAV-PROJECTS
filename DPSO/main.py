@@ -280,15 +280,11 @@ def main(num_tasks=NUM_TASKS, num_uavs=NUM_UAVS):
 
     runtime = time.perf_counter() - start
     metrics = compute_metrics(result, tasks, uavs)
+    metrics['runtime'] = runtime
     print(f"Completion rate: {metrics['completion_rate']:.2%}")
 
-    return {
-        **metrics,
-        "uavs": uavs,
-        "tasks": tasks,
-        "demand_map": demand_map,
-        "runtime": runtime,
-    }
+
+    return metrics
 
 
 if __name__ == "__main__":
