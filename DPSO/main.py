@@ -288,4 +288,4 @@ def main(num_tasks=NUM_TASKS, num_uavs=NUM_UAVS):
 
 
 if __name__ == "__main__":
-    main(60, 5)
+    main(30, 5)

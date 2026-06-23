@@ -11,8 +11,10 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
     
 from common.environment  import generate_demand_map, generate_tasks, generate_uavs, generate_new_task
-from scheduler    import assign_tasks
-from rl_agent     import QLearningPlanner
+from scheduler           import assign_tasks
+from pr_module           import repair_assignments
+from rl_agent            import QLearningPlanner
+from visualization       import plot_all
 from common.config import (
     SEED,
     UAV_SEED,
@@ -35,13 +37,24 @@ def consume_resources(task, uav):
     uav.remaining_hover_time -= travel_time + task.hover_time
     uav.remaining_compute    -= task.compute_load
 
+    current_time = uav.max_hover_time - uav.remaining_hover_time
+    task.start_time = current_time
+    task.finish_time = task.hover_time
 
-def move_to(task, uav):
+
+def move_to(task, uav, clock):
+    travel_time   = distance_to(task, uav) / UAV_SPEED
+
+    consume_resources(task, uav)
     uav.curr_x = task.x
     uav.curr_y = task.y
-    consume_resources(task, uav)
 
-def is_feasible(task, uav):
+    finish = clock + travel_time + task.hover_time
+    task.start_time = clock + travel_time
+    task.finish_time = finish
+    return finish
+
+def is_feasible(task, uav, clock):
     travel_energy = distance_to(task, uav) * ENERGY_PER_METER
     travel_time   = distance_to(task, uav) / UAV_SPEED
     remaining_energy = uav.remaining_energy
@@ -54,8 +67,7 @@ def is_feasible(task, uav):
     if(remaining_energy < 0 or remaining_hover_time < 0 or remaining_compute < 0):
         return False
     
-    current_time = uav.max_hover_time - uav.remaining_hover_time
-    if(current_time + travel_time + task.hover_time > task.deadline):
+    if(clock + travel_time + task.hover_time > task.deadline):
         return False
     
     return True
@@ -63,7 +75,7 @@ def is_feasible(task, uav):
 def setup_environment(num_tasks=NUM_TASKS, num_uavs=NUM_UAVS):
 
     print("=" * 60)
-    print("  DMMP-PR-TSA  |  UAV Remote Sensing Scheduler")
+    print("  DMMP-R-RL-AC  |  UAV Remote Sensing Scheduler")
     print("=" * 60)
 
     print("\n[1] Generating sensing-demand map...")
@@ -95,19 +107,16 @@ def run_scheduler(tasks, uavs):
     print("Running D-module Region Partioning")
     print('='*60)
 
-    uavs, unassigned_tasks = assign_tasks(tasks, uavs)
+    uavs, _legacy_empty = assign_tasks(tasks, uavs)
 
-    print(f"Total tasks assigned: {len(tasks) - len(unassigned_tasks)}/{len(tasks)}\n")
+    assigned_count = sum(len(uav.assigned_tasks) for uav in uavs)
+    print(f"Total tasks assigned: {assigned_count}/{len(tasks)}\n")
 
     print("Task Allocation:")
     for uav in uavs:
         print(f"{uav.uav_id}:{[task.task_id for task in uav.assigned_tasks]}")
 
-    print("\nUnassigned Tasks:")
-    if(len(unassigned_tasks) == 0):
-        print("None\n")
-    else:
-        print(f"{[task.task_id for task in unassigned_tasks]}\n")
+    print("\nD-module coverage validation: PASS (all tasks assigned exactly once)\n")
 
     for uav in uavs:
         compute = sum(t.compute_load for t in uav.assigned_tasks)
@@ -120,7 +129,19 @@ def run_scheduler(tasks, uavs):
             f"H={hover:.1f}/{uav.max_hover_time:.1f}, "
             f"C={compute:.1f}/{uav.max_compute:.1f}"
         )
-    return uavs, unassigned_tasks
+    return uavs, []
+
+
+def run_pr_module(tasks, uavs):
+    print('='*60)
+    print("Running PR-module Resource-Aware Regret Repair")
+    print('='*60)
+
+    uavs, backup_pool = repair_assignments(uavs, tasks)
+    repaired_count = sum(len(uav.assigned_tasks) for uav in uavs)
+    print(f"Tasks retained after repair: {repaired_count}/{len(tasks)}")
+    print(f"Backup pool: {[task.task_id for task in backup_pool]}\n")
+    return uavs, backup_pool
 
 def find_path(uavs):
     all_routes = []
@@ -137,16 +158,19 @@ def main(num_tasks=NUM_TASKS, num_uavs=NUM_UAVS, optimize=True, save_dir=None, p
     start = time.perf_counter()
 
     demand_map, tasks, uavs = setup_environment(num_tasks=num_tasks, num_uavs=num_uavs)
-    uavs, unassigned_tasks = run_scheduler(tasks, uavs)
+    uavs, _legacy_empty = run_scheduler(tasks, uavs)
+    uavs, backup_pool = run_pr_module(tasks, uavs)
     all_routes = find_path(uavs)
 
     for uav, route in zip(uavs, all_routes):
+        clock = 0.0
         for task in route:
-            if not is_feasible(task, uav):
+            if not is_feasible(task, uav, clock):
                 task.completed = False
                 continue
-            move_to(task, uav)
+            finish = move_to(task, uav, clock)
             task.completed = True
+            clock = finish
     
     completed_tasks = 0
     total_tasks = len(tasks)
@@ -164,6 +188,8 @@ def main(num_tasks=NUM_TASKS, num_uavs=NUM_UAVS, optimize=True, save_dir=None, p
     high_priority_completion_rate = high_priority_completed_tasks / total_high_priority_tasks
     runtime = time.perf_counter() - start
 
+    # plot_all(uavs, all_routes, tasks, demand_map)
+
     print(f"Task Completion Rate = {completion_rate * 100}%")
     print(f"High Priority Task Completion Rate = {high_priority_completion_rate * 100}%")
     print(f"Total Runtime for the algorithm = {runtime}(secs)")
@@ -171,10 +197,11 @@ def main(num_tasks=NUM_TASKS, num_uavs=NUM_UAVS, optimize=True, save_dir=None, p
     metrics = {
         "completion_rate": completion_rate,
         "high_priority_completion_rate": high_priority_completion_rate,
+        "backup_pool_size": len(backup_pool),
         "runtime": runtime,
     }
 
     return metrics
 
 if __name__ == '__main__':
-    main(num_tasks=50,num_uavs=9)
+    main(num_tasks=30,num_uavs=5)

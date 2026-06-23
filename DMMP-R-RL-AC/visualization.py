@@ -195,7 +195,7 @@ def plot_trajectories(ax, uavs, routes, demand_map):
     )
 
     for uav in uavs:
-        route = routes.get(uav.uav_id, [])
+        route = routes[uav.uav_id]
         col = _uav_color(uav.uav_id)
 
         ax.scatter(
@@ -349,18 +349,20 @@ def plot_deadline_compliance(ax, uavs, routes):
     ylabels = []
 
     for uav in uavs:
-        route = routes.get(uav.uav_id, [])
+        route = routes[uav.uav_id]
         if not route:
             continue
 
-        timeline = estimate_finish_time(uav, route, UAV_SPEED)
+        # timeline = estimate_finish_time(uav, route, UAV_SPEED)
+
         clock = 0.0
         prev_x, prev_y = uav.x, uav.y
 
-        for task, finish in timeline:
+        for task in route:
             travel = math.hypot(task.x - prev_x, task.y - prev_y) / UAV_SPEED
             start = clock + travel
             dur = task.hover_time
+            finish = start + dur
             on_time = check_deadline(task, finish)
             color = '#2ca02c' if on_time else '#d62728'
 

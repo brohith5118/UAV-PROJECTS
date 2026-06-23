@@ -362,7 +362,7 @@ def main(num_tasks=None, num_uavs=None, optimize=True, save_dir=None, prefix="")
     report_metrics(uavs, tasks, routes)
 
     # ---- Visualise ----
-    visualise(uavs, routes, tasks, demand_map, reward_logs, save_dir=save_dir, prefix=prefix)
+    # visualise(uavs, routes, tasks, demand_map, reward_logs, save_dir=save_dir, prefix=prefix)
 
     route_usage = update_final_route_resources(uavs)
 

@@ -33,6 +33,9 @@ class UAV:
         self.y        = y
         self.uav_type = uav_type   # ψ_{UAV_u}
 
+        self.centroid_x = x
+        self.centroid_y = y
+
         self.curr_x = x
         self.curr_y = y
 

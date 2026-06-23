@@ -342,8 +342,8 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Compare UAV scheduling algorithms across task and UAV scalability experiments."
     )
-    parser.add_argument("--task-counts", nargs="+", type=int, default=list(range(10, 101, 10)))
-    parser.add_argument("--uav-counts", nargs="+", type=int, default=list(range(3, 21)))
+    parser.add_argument("--task-counts", nargs="+", type=int, default=list(range(30, 101, 10)))
+    parser.add_argument("--uav-counts", nargs="+", type=int, default=list(range(3, 10)))
     parser.add_argument("--fixed-uavs", type=int, default=5)
     parser.add_argument("--fixed-tasks", type=int, default=50)
     return parser.parse_args()
