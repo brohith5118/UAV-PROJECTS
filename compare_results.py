@@ -26,7 +26,7 @@ PUBLICATION_GRAPH_DIR.mkdir(parents=True, exist_ok=True)
 ALGORITHMS = {
     "DMMP-PR-TSA": "DMMP-PR-TSA",
     "DMMP-R-RL-AC": "DMMP-R-RL-AC",
-    "Greedy-Nearest": "Greedy-Nearest",
+    "Random": "Random",
     "PSO": "PSO",
     "DPSO": "DPSO",
 }
@@ -40,7 +40,7 @@ METRICS = [
 ALGORITHM_COLORS = {
     "DMMP-PR-TSA": "#1f77b4",
     "DMMP-R-RL-AC": "#2ca02c",
-    "Greedy-Nearest": "#d62728",
+    "Random": "#d62728",
     "PSO": "#9467bd",
     "DPSO": "#8c564b",
 }
@@ -48,7 +48,7 @@ ALGORITHM_COLORS = {
 ALGORITHM_MARKERS = {
     "DMMP-PR-TSA": "o",
     "DMMP-R-RL-AC": "s",
-    "Greedy-Nearest": "^",
+    "Random": "^",
     "PSO": "D",
     "DPSO": "P",
 }

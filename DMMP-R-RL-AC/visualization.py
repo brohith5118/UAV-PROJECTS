@@ -16,13 +16,11 @@ if ROOT_DIR not in sys.path:
 
 import math
 
-import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
 
-from common.config import MAP_WIDTH, MAP_HEIGHT, UAV_SPEED, GRID_RESOLUTION, ENERGY_PER_METER
-from utils import estimate_finish_time, check_deadline
+from common.config import MAP_WIDTH, MAP_HEIGHT, UAV_SPEED, GRID_RESOLUTION
 
 
 OUTPUT_FOLDER = "generated_graphs"
@@ -52,6 +50,15 @@ def get_save_path(filename, save_dir=None):
     folder = save_dir or OUTPUT_FOLDER
     os.makedirs(folder, exist_ok=True)
     return os.path.join(folder, filename)
+
+
+def _distance(x1, y1, x2, y2):
+    """Euclidean distance in map units."""
+    return math.hypot(x1 - x2, y1 - y2)
+
+
+def _check_deadline(task, finish_time):
+    return finish_time <= task.deadline
 
 
 # ----------------------------------------------------------
@@ -353,17 +360,15 @@ def plot_deadline_compliance(ax, uavs, routes):
         if not route:
             continue
 
-        # timeline = estimate_finish_time(uav, route, UAV_SPEED)
-
         clock = 0.0
         prev_x, prev_y = uav.x, uav.y
 
         for task in route:
-            travel = math.hypot(task.x - prev_x, task.y - prev_y) / UAV_SPEED
+            travel = _distance(prev_x, prev_y, task.x, task.y) / UAV_SPEED
             start = clock + travel
             dur = task.hover_time
             finish = start + dur
-            on_time = check_deadline(task, finish)
+            on_time = _check_deadline(task, finish)
             color = '#2ca02c' if on_time else '#d62728'
 
             ax.barh(

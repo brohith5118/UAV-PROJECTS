@@ -48,8 +48,8 @@ from pr_module    import (
     reassign_after_uav_failure,
     cancel_tasks,
 )
-from rl_agent     import run_tsa_for_fleet, QLearningTrajectoryPlanner
-from utils        import print_mission_metrics
+from rl_agent     import QLearningTrajectoryPlanner
+from utils        import print_mission_metrics, update_execution_status
 from visualization import plot_all, plot_reward_convergence
 
 from common.config import (
@@ -84,7 +84,8 @@ def setup_environment(num_tasks=None, num_uavs=None):
     demand_map = generate_demand_map(seed=SEED)
     print(f"    Map size : {demand_map.shape[1]} × {demand_map.shape[0]} cells")
 
-    print(f"\n[2] Sampling {NUM_TASKS} tasks from demand map...")
+    actual_num_tasks = num_tasks if num_tasks is not None else NUM_TASKS
+    print(f"\n[2] Sampling {actual_num_tasks} tasks from demand map...")
     tasks, _ = generate_tasks(
         num_tasks           = num_tasks if num_tasks is not None else NUM_TASKS,
         high_priority_ratio = HIGH_PRIORITY_RATIO,
@@ -97,8 +98,9 @@ def setup_environment(num_tasks=None, num_uavs=None):
     print(f"    Tasks : {len(tasks)}  "
           f"(P1={p1}, P2={p2}, P3={p3})")
 
-    print(f"\n[3] Generating {NUM_UAVS} heterogeneous UAVs...")
-    uavs = generate_uavs(num_uavs=num_uavs if num_uavs is not None else NUM_UAVS, seed=UAV_SEED)
+    actual_num_uavs = num_uavs if num_uavs is not None else NUM_UAVS
+    print(f"\n[3] Generating {actual_num_uavs} heterogeneous UAVs...")
+    uavs = generate_uavs(num_uavs=actual_num_uavs, seed=UAV_SEED)
     for uav in uavs:
         print(f"    {uav}")
 
@@ -132,10 +134,6 @@ def run_pr_module(tasks, uavs, optimize=True):
 
     print("\n[5] PR-MODULE: SOM Pre-Assignment")
     print("    Running SOM competitive learning...")
-
-    # Reset task assignment metadata from D-module
-    for t in tasks:
-        t.assigned_uav = None
 
     uavs = preassign(tasks, uavs, optimize=optimize)
 
@@ -226,7 +224,7 @@ def simulate_dynamic_events(tasks, uavs, demand_map, optimize=True):
         t for u in uavs for t in u.assigned_tasks
     ]
     if assigned_tasks_flat:
-        from config import MAP_WIDTH, MAP_HEIGHT, GRID_RESOLUTION
+        from common.config import MAP_WIDTH, MAP_HEIGHT, GRID_RESOLUTION
         map_max_x = MAP_WIDTH  * GRID_RESOLUTION
         map_max_y = MAP_HEIGHT * GRID_RESOLUTION
 
@@ -303,34 +301,6 @@ def visualise(uavs, routes, tasks, demand_map, reward_logs, save_dir=None, prefi
     plot_reward_convergence(reward_logs, save_dir=save_dir, prefix=prefix)
 
 
-def update_final_route_resources(uavs):
-    from common.config import ENERGY_PER_METER, UAV_SPEED
-    import math
-
-    usage = {}
-    for uav in uavs:
-        current_x = uav.x
-        current_y = uav.y
-        used_energy = 0.0
-        used_hover = 0.0
-        used_compute = 0.0
-
-        for task in uav.assigned_tasks:
-            distance = math.hypot(current_x - task.x, current_y - task.y)
-            used_energy += task.energy_cost + distance * ENERGY_PER_METER
-            used_hover += task.hover_time + distance / UAV_SPEED
-            used_compute += task.compute_load
-            current_x = task.x
-            current_y = task.y
-
-        uav.remaining_energy = uav.max_energy - used_energy
-        uav.remaining_hover_time = uav.max_hover_time - used_hover
-        uav.remaining_compute = uav.max_compute - used_compute
-        usage[uav.uav_id] = (used_energy, used_hover, used_compute)
-
-    return usage
-
-
 # ==========================================================
 # MAIN
 # ==========================================================
@@ -342,6 +312,7 @@ def main(num_tasks=None, num_uavs=None, optimize=True, save_dir=None, prefix="")
         total_travel_distance,
         energy_utilisation,
         compute_utilisation,
+        update_execution_status,
     )
     start_time = time.perf_counter()
     # ---- Environment ----
@@ -351,20 +322,20 @@ def main(num_tasks=None, num_uavs=None, optimize=True, save_dir=None, prefix="")
     uavs, _unassigned = run_d_module(tasks, uavs)
 
     # ---- PR-Module ----
-    # uavs = run_pr_module(tasks, uavs, optimize=optimize)
+    uavs = run_pr_module(tasks, uavs, optimize=optimize)
 
     # ---- TSA + Dynamic Events ----
     routes, reward_logs, event_log = simulate_dynamic_events(
         tasks, uavs, demand_map, optimize=optimize
     )
 
+    route_usage = update_execution_status(uavs, tasks)
+
     # ---- Metrics ----
     report_metrics(uavs, tasks, routes)
 
     # ---- Visualise ----
     # visualise(uavs, routes, tasks, demand_map, reward_logs, save_dir=save_dir, prefix=prefix)
-
-    route_usage = update_final_route_resources(uavs)
 
     # Compute metrics
     cr  = completion_rate(uavs, tasks)
@@ -409,4 +380,4 @@ def main(num_tasks=None, num_uavs=None, optimize=True, save_dir=None, prefix="")
 
 
 if __name__ == '__main__':
-    main(30,5)
+    main(40,5)

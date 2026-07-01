@@ -102,6 +102,8 @@ def route_deadline_penalty(uav, tasks):
 
 
 def route_is_resource_feasible(uav, tasks):
+    if any(not uav.is_compatible(task) for task in tasks):
+        return False
     total_energy, total_hover, total_compute = estimate_route_cost(uav, tasks)
     return (
         total_energy <= uav.max_energy
@@ -455,9 +457,11 @@ def assign_tasks(task_list, uavs):
                 _best_cost, best_uav, best_route = feasible_candidates[0]
 
                 best_uav.assigned_tasks = best_route
+                task.assigned_uav = best_uav
                 
 
             else:
+                task.assigned_uav = None
                 unassigned_tasks.append(task)
 
         # UPDATE CENTROIDS ONCE PER ITERATION
@@ -471,8 +475,6 @@ def assign_tasks(task_list, uavs):
         converged = True
 
         for uav in uavs:
-            update_lagrange_multipliers(uav)
-
             new_set = set(
                 t.task_id
                 for t in uav.assigned_tasks
@@ -497,6 +499,8 @@ def assign_tasks(task_list, uavs):
             and route_is_resource_feasible(uav, candidate_route)
         ):
             uav.assigned_tasks = candidate_route
+        for task in uav.assigned_tasks:
+            task.assigned_uav = uav
 
     # RESET RESOURCES
     for uav in uavs:
@@ -591,7 +595,7 @@ def repartition_with_hysteresis(
 
 def _clone_uav(uav):
     """Shallow clone for hysteresis testing."""
-    from uav import UAV
+    from common.uav import UAV
     u2 = UAV(
         uav.uav_id,
         uav.x, uav.y,

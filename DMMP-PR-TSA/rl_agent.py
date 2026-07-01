@@ -42,7 +42,7 @@ import math
 import random
 import numpy as np
 
-from utils import calculate_reward, estimate_finish_time, check_deadline
+from utils import calculate_reward, estimate_finish_time, check_deadline, estimate_route_usage
 from common.config import (
     EPOCHS,
     RL_ALPHA,
@@ -124,9 +124,9 @@ class QLearningTrajectoryPlanner:
         route = []
         
         # Track simulated resources
-        curr_hover = self.uav.remaining_hover_time
-        curr_energy = self.uav.remaining_energy
-        curr_compute = self.uav.remaining_compute
+        curr_hover = self.uav.max_hover_time
+        curr_energy = self.uav.max_energy
+        curr_compute = self.uav.max_compute
 
         while remaining:
             best_idx = None
@@ -144,14 +144,14 @@ class QLearningTrajectoryPlanner:
                     task.compute_load <= curr_compute):
                     
                     # Balanced score: penalize distance and late deadlines, favor priority
-                    score = -0.5 * dist - 0.2 * task.deadline + 10.0 * task.priority
+                    priority_value = {1: 3.0, 2: 2.0, 3: 1.0}.get(task.priority, 1.0)
+                    score = -0.5 * dist - 0.2 * task.deadline + 10.0 * priority_value
                     if score > best_score:
                         best_score = score
                         best_idx = idx
             
-            # If no task is feasible under remaining resources, fallback to nearest task
             if best_idx is None:
-                best_idx = min(remaining, key=lambda idx: math.hypot(current_pos[0] - self.tasks[idx].x, current_pos[1] - self.tasks[idx].y))
+                break
                 
             task = self.tasks[best_idx]
             dist = math.hypot(current_pos[0] - task.x, current_pos[1] - task.y)
@@ -232,9 +232,6 @@ class QLearningTrajectoryPlanner:
                 task.compute_load <= curr_compute):
                 feasible.append(idx)
                 
-        # If nothing feasible, open all unvisited as a fallback
-        if not feasible:
-            feasible = [i for i in range(self.n) if i not in visited]
         return feasible
 
     # --------------------------------------------------
@@ -272,9 +269,9 @@ class QLearningTrajectoryPlanner:
         route_indices  = []
 
         # Dynamic capacity tracking
-        curr_hover = self.uav.remaining_hover_time
-        curr_energy = self.uav.remaining_energy
-        curr_compute = self.uav.remaining_compute
+        curr_hover = self.uav.max_hover_time
+        curr_energy = self.uav.max_energy
+        curr_compute = self.uav.max_compute
         curr_time = 0.0
 
         while len(visited) < self.n:
@@ -350,7 +347,13 @@ class QLearningTrajectoryPlanner:
             # Max future Q lookup
             next_visited  = visited | {action}
             next_visited_mask = visited_mask | (1 << action)
-            next_feasible = [i for i in range(self.n) if i not in next_visited]
+            next_feasible = self._feasible_actions(
+                next_visited,
+                (next_task.x, next_task.y),
+                next_hover,
+                next_energy,
+                next_compute,
+            )
             
             if next_feasible:
                 next_q_vals = self._get_q_values(action + 1, next_visited_mask)
@@ -431,14 +434,24 @@ class QLearningTrajectoryPlanner:
         if self._best_route and len(self._best_route) == self.n:
             return [self.tasks[i] for i in self._best_route]
 
-        # --- Greedy fallback using Q-table ---
+        # Greedy fallback using learned Q-values while preserving feasibility.
         current_state = 0
         visited_mask = 0
         route = []
         visited = set()
+        current_pos = (self.uav.x, self.uav.y)
+        curr_hover = self.uav.max_hover_time
+        curr_energy = self.uav.max_energy
+        curr_compute = self.uav.max_compute
 
         while len(visited) < self.n:
-            remaining = [j for j in range(self.n) if j not in visited]
+            remaining = self._feasible_actions(
+                visited,
+                current_pos,
+                curr_hover,
+                curr_energy,
+                curr_compute,
+            )
             if not remaining:
                 break
             q_vals = self._get_q_values(current_state, visited_mask)
@@ -447,14 +460,26 @@ class QLearningTrajectoryPlanner:
             visited.add(next_idx)
             visited_mask |= (1 << next_idx)
             current_state = next_idx + 1
+            task = self.tasks[next_idx]
+            dist = math.hypot(current_pos[0] - task.x, current_pos[1] - task.y)
+            curr_hover -= dist / UAV_SPEED + task.hover_time
+            curr_energy -= dist * ENERGY_PER_METER + task.energy_cost
+            curr_compute -= task.compute_load
+            current_pos = (task.x, task.y)
 
-        return [self.tasks[i] for i in route]
+        if len(route) == self.n:
+            return [self.tasks[i] for i in route]
+
+        # Upstream D/PR stages provide a feasibility-filtered task set. If
+        # tabular exploration fails to recover a complete sequence, preserve
+        # that set rather than silently dropping pending tasks.
+        return list(self.tasks)
 
     # --------------------------------------------------
     # DEADLINE-AWARE SEQUENCE REORDER
     # --------------------------------------------------
 
-    def reorder_by_deadline(self, route):
+    def _legacy_reorder_by_deadline(self, route):
         """
         Given an initial route (list of Tasks), move any
         task whose deadline would be missed to the earliest
@@ -492,7 +517,18 @@ class QLearningTrajectoryPlanner:
                         self.uav, candidate, UAV_SPEED
                     )
                     _, ft2 = tl2[pos]
-                    if check_deadline(task, ft2):
+                    energy, hover, compute = estimate_route_usage(
+                        self.uav,
+                        candidate,
+                        UAV_SPEED,
+                        ENERGY_PER_METER,
+                    )
+                    feasible = (
+                        energy <= self.uav.max_energy + 1e-9
+                        and hover <= self.uav.max_hover_time + 1e-9
+                        and compute <= self.uav.max_compute + 1e-9
+                    )
+                    if feasible and check_deadline(task, ft2):
                         # A beneficial move was found – apply it
                         route = candidate
                         adjusted = True
@@ -501,6 +537,62 @@ class QLearningTrajectoryPlanner:
                     break
 
         return route
+
+    def reorder_by_deadline(self, route):
+        """
+        Rebuild the route with priority/deadline-aware feasible insertion.
+        The paper requires high-priority tasks to be served before lower
+        priority work while preserving endurance and compute feasibility.
+        """
+        ordered = []
+        for task in sorted(route, key=lambda item: (item.deadline, item.priority, item.task_id)):
+            best_route = None
+            best_score = None
+            for pos in range(len(ordered) + 1):
+                candidate = ordered[:pos] + [task] + ordered[pos:]
+                energy, hover, compute = estimate_route_usage(
+                    self.uav,
+                    candidate,
+                    UAV_SPEED,
+                    ENERGY_PER_METER,
+                )
+                if (
+                    energy > self.uav.max_energy + 1e-9
+                    or hover > self.uav.max_hover_time + 1e-9
+                    or compute > self.uav.max_compute + 1e-9
+                ):
+                    continue
+
+                misses = 0
+                high_misses = 0
+                tardiness = 0.0
+                for item, finish_time in estimate_finish_time(self.uav, candidate, UAV_SPEED):
+                    late = max(0.0, finish_time - item.deadline)
+                    if late > 0:
+                        misses += 1
+                        high_misses += int(item.priority == 1)
+                        tardiness += late * (3.0 if item.priority == 1 else 1.0)
+
+                score = (high_misses, misses, tardiness, hover, energy)
+                if best_score is None or score < best_score:
+                    best_score = score
+                    best_route = candidate
+
+            ordered = best_route if best_route is not None else ordered + [task]
+
+        energy, hover, compute = estimate_route_usage(
+            self.uav,
+            ordered,
+            UAV_SPEED,
+            ENERGY_PER_METER,
+        )
+        if (
+            energy <= self.uav.max_energy + 1e-9
+            and hover <= self.uav.max_hover_time + 1e-9
+            and compute <= self.uav.max_compute + 1e-9
+        ):
+            return ordered
+        return list(route)
 
 
 # ----------------------------------------------------------

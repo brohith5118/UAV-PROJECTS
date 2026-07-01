@@ -48,6 +48,7 @@ from common.config import (
     MAP_HEIGHT,
     GRID_RESOLUTION,
 )
+from utils import estimate_route_usage, recompute_route_resources
 
 
 # ----------------------------------------------------------
@@ -135,6 +136,52 @@ def matching_distance(task, uav, base_x=0.0, base_y=0.0):
         return float('inf')
 
     return d_p + C_PHI * d_phi + C_RES * d_res
+
+
+def _route_usage(uav, route):
+    return estimate_route_usage(uav, route, UAV_SPEED, ENERGY_PER_METER)
+
+
+def _route_feasible(uav, route):
+    if any(not _is_capability_compatible(uav, task) for task in route):
+        return False
+
+    energy, hover, compute = _route_usage(uav, route)
+    return (
+        energy <= uav.max_energy + 1e-9
+        and hover <= uav.max_hover_time + 1e-9
+        and compute <= uav.max_compute + 1e-9
+    )
+
+
+def _best_insertion_route(uav, route, task, base_x=0.0, base_y=0.0):
+    if not _is_capability_compatible(uav, task):
+        return None
+
+    best_route = None
+    best_score = None
+    for pos in range(len(route) + 1):
+        candidate = route[:pos] + [task] + route[pos:]
+        if not _route_feasible(uav, candidate):
+            continue
+
+        energy, hover, compute = _route_usage(uav, candidate)
+        deadline_misses = 0
+        clock = 0.0
+        current_x, current_y = uav.x, uav.y
+        for item in candidate:
+            clock += math.hypot(current_x - item.x, current_y - item.y) / UAV_SPEED
+            clock += item.hover_time
+            deadline_misses += int(clock > item.deadline)
+            current_x, current_y = item.x, item.y
+
+        dist_to_base = math.hypot(candidate[-1].x - base_x, candidate[-1].y - base_y)
+        score = (deadline_misses, hover, energy, compute, dist_to_base)
+        if best_score is None or score < best_score:
+            best_score = score
+            best_route = candidate
+
+    return best_route
 
 
 # ----------------------------------------------------------
@@ -265,12 +312,7 @@ def _deduct_task_resources(uav_id, uav, task, rem_energy, rem_hover, rem_compute
 
 
 def _recompute_uav_resources(uav):
-    uav.reset_resources()
-    for task in uav.assigned_tasks:
-        e_needed, h_needed, c_needed = _task_resource_cost(uav, task)
-        uav.remaining_energy -= e_needed
-        uav.remaining_hover_time -= h_needed
-        uav.remaining_compute -= c_needed
+    recompute_route_resources(uav)
 
 
 def redistribute_load(uavs, base_x=0.0, base_y=0.0):
@@ -281,16 +323,7 @@ def redistribute_load(uavs, base_x=0.0, base_y=0.0):
     print("\n[PR] Running Dynamic Reallocation Engine for load balancing...")
 
     def get_utilizations(u):
-        total_energy = sum(
-            t.energy_cost + ENERGY_PER_METER * math.hypot(u.x - t.x, u.y - t.y)
-            for t in u.assigned_tasks
-        )
-        total_hover = sum(
-            t.hover_time + math.hypot(u.x - t.x, u.y - t.y) / UAV_SPEED
-            for t in u.assigned_tasks
-        )
-        total_compute = sum(t.compute_load for t in u.assigned_tasks)
-        return total_energy, total_hover, total_compute
+        return _route_usage(u, u.assigned_tasks)
 
     max_passes = 5
     for pass_idx in range(max_passes):
@@ -314,7 +347,7 @@ def redistribute_load(uavs, base_x=0.0, base_y=0.0):
         for overflow, u_over in overloaded_uavs:
             tasks_to_migrate = sorted(
                 u_over.assigned_tasks,
-                key=lambda t: (-t.priority, t.energy_cost + t.hover_time + t.compute_load),
+                key=lambda t: (t.priority, t.energy_cost + t.hover_time + t.compute_load),
                 reverse=True
             )
             
@@ -328,24 +361,29 @@ def redistribute_load(uavs, base_x=0.0, base_y=0.0):
                     if not u_target.is_compatible(task):
                         continue
                         
-                    target_te, target_th, target_tf = get_utilizations(u_target)
-                    dist = math.hypot(u_target.x - task.x, u_target.y - task.y)
-                    e_add = task.energy_cost + ENERGY_PER_METER * dist
-                    h_add = task.hover_time + dist / UAV_SPEED
-                    f_add = task.compute_load
-                    
-                    if (target_te + e_add <= u_target.max_energy and
-                        target_th + h_add <= u_target.max_hover_time and
-                        (task.compute_load == 0 or target_tf + f_add <= u_target.max_compute)):
-                        
-                        score = -dist + 10.0 * (1.0 - (target_te + e_add) / u_target.max_energy)
+                    candidate_route = _best_insertion_route(
+                        u_target,
+                        list(u_target.assigned_tasks),
+                        task,
+                        base_x,
+                        base_y,
+                    )
+                    if candidate_route is not None:
+                        target_te, target_th, _target_tf = _route_usage(u_target, candidate_route)
+                        score = -target_th + 10.0 * (1.0 - target_te / u_target.max_energy)
                         if score > best_score:
                             best_score = score
                             best_target_uav = u_target
                             
                 if best_target_uav is not None:
                     u_over.assigned_tasks.remove(task)
-                    best_target_uav.assigned_tasks.append(task)
+                    best_target_uav.assigned_tasks = _best_insertion_route(
+                        best_target_uav,
+                        list(best_target_uav.assigned_tasks),
+                        task,
+                        base_x,
+                        base_y,
+                    )
                     task.assigned_uav = best_target_uav
                     reallocated_any = True
                     print(f"      Migrated Task {task.task_id} from UAV {u_over.uav_id} to UAV {best_target_uav.uav_id}")
@@ -359,7 +397,10 @@ def redistribute_load(uavs, base_x=0.0, base_y=0.0):
                 te, th, tf = get_utilizations(u_over)
                 if te <= u_over.max_energy and th <= u_over.max_hover_time and tf <= u_over.max_compute:
                     continue
-                u_over.assigned_tasks.sort(key=lambda t: -t.priority)
+                u_over.assigned_tasks.sort(
+                    key=lambda t: (t.priority, t.energy_cost + t.hover_time + t.compute_load),
+                    reverse=True,
+                )
                 while u_over.assigned_tasks and (te > u_over.max_energy or th > u_over.max_hover_time or tf > u_over.max_compute):
                     evicted = u_over.assigned_tasks.pop(0)
                     evicted.assigned_uav = None
@@ -375,17 +416,23 @@ def redistribute_load(uavs, base_x=0.0, base_y=0.0):
 
 def som_assign(tasks, uavs, base_x=0.0, base_y=0.0, optimize=True):
     if not tasks or not uavs:
-        return {}
+        return {}, {}
 
     active_uavs = [u for u in uavs if u.active]
     if not active_uavs:
-        return {t.task_id: None for t in tasks}
+        return {t.task_id: None for t in tasks}, {}
 
     uav_map = {u.uav_id: u for u in active_uavs}
+    planned_routes = {u.uav_id: list(u.assigned_tasks) for u in active_uavs}
     
-    rem_energy = {u.uav_id: u.remaining_energy for u in active_uavs}
-    rem_hover = {u.uav_id: u.remaining_hover_time for u in active_uavs}
-    rem_compute = {u.uav_id: u.remaining_compute for u in active_uavs}
+    rem_energy = {}
+    rem_hover = {}
+    rem_compute = {}
+    for u in active_uavs:
+        energy, hover, compute = _route_usage(u, planned_routes[u.uav_id])
+        rem_energy[u.uav_id] = u.max_energy - energy
+        rem_hover[u.uav_id] = u.max_hover_time - hover
+        rem_compute[u.uav_id] = u.max_compute - compute
 
     uav_features = {u.uav_id: uav_feature(u) for u in active_uavs}
 
@@ -439,6 +486,7 @@ def som_assign(tasks, uavs, base_x=0.0, base_y=0.0, optimize=True):
     for task in sorted_tasks:
         best_dist = float('inf')
         best_uav  = None
+        best_route = None
 
         for uav in active_uavs:
             if optimize:
@@ -451,30 +499,43 @@ def som_assign(tasks, uavs, base_x=0.0, base_y=0.0, optimize=True):
                     uav_map,
                     use_weight_position=False,
                 )
-                if not _can_take_task(uav_proxy, task, base_x, base_y):
+                candidate_route = _best_insertion_route(
+                    uav,
+                    planned_routes[uav.uav_id],
+                    task,
+                    base_x,
+                    base_y,
+                )
+                if candidate_route is None:
                     continue
                 dist = matching_distance(task, uav_proxy, base_x, base_y)
             else:
-                # Baseline distance-only heuristic
+                candidate_route = _best_insertion_route(
+                    uav,
+                    planned_routes[uav.uav_id],
+                    task,
+                    base_x,
+                    base_y,
+                )
+                if candidate_route is None:
+                    continue
                 dist = math.hypot(uav.x - task.x, uav.y - task.y)
             if dist < best_dist:
                 best_dist = dist
                 best_uav  = uav
+                best_route = candidate_route
 
         if best_uav is not None:
             assignment[task.task_id] = best_uav
-            _deduct_task_resources(
-                best_uav.uav_id,
-                best_uav,
-                task,
-                rem_energy,
-                rem_hover,
-                rem_compute,
-            )
+            planned_routes[best_uav.uav_id] = best_route
+            energy, hover, compute = _route_usage(best_uav, best_route)
+            rem_energy[best_uav.uav_id] = best_uav.max_energy - energy
+            rem_hover[best_uav.uav_id] = best_uav.max_hover_time - hover
+            rem_compute[best_uav.uav_id] = best_uav.max_compute - compute
         else:
             assignment[task.task_id] = None
 
-    return assignment
+    return assignment, planned_routes
 
 
 # ----------------------------------------------------------
@@ -482,18 +543,35 @@ def som_assign(tasks, uavs, base_x=0.0, base_y=0.0, optimize=True):
 # ----------------------------------------------------------
 
 def preassign(tasks, uavs, base_x=0.0, base_y=0.0, optimize=True):
-    for uav in uavs:
-        uav.clear_tasks()
-        uav.reset_resources()
+    has_partition = any(uav.assigned_tasks for uav in uavs)
 
-    assignment = som_assign(tasks, uavs, base_x, base_y, optimize)
-
-    for task in tasks:
-        uav = assignment.get(task.task_id)
-        if uav is not None:
-            uav.assigned_tasks.append(task)
-            task.assigned_uav = uav
+    if has_partition:
+        assigned_ids = set()
+        for uav in uavs:
+            for task in uav.assigned_tasks:
+                task.assigned_uav = uav
+                assigned_ids.add(task.task_id)
             _recompute_uav_resources(uav)
+        candidate_tasks = [task for task in tasks if task.task_id not in assigned_ids]
+    else:
+        for uav in uavs:
+            uav.clear_tasks()
+            uav.reset_resources()
+        for task in tasks:
+            task.assigned_uav = None
+        candidate_tasks = list(tasks)
+
+    assignment, planned_routes = som_assign(candidate_tasks, uavs, base_x, base_y, optimize)
+
+    for uav in uavs:
+        uav.assigned_tasks = planned_routes.get(uav.uav_id, uav.assigned_tasks)
+        for task in uav.assigned_tasks:
+            task.assigned_uav = uav
+        _recompute_uav_resources(uav)
+
+    for task in candidate_tasks:
+        if assignment.get(task.task_id) is None:
+            task.assigned_uav = None
 
     if optimize:
         uavs = redistribute_load(uavs, base_x, base_y)
@@ -502,14 +580,18 @@ def preassign(tasks, uavs, base_x=0.0, base_y=0.0, optimize=True):
 
 
 def reassign_new_tasks(new_tasks, uavs, base_x=0.0, base_y=0.0, optimize=True):
-    assignment = som_assign(new_tasks, uavs, base_x, base_y, optimize)
+    assignment, planned_routes = som_assign(new_tasks, uavs, base_x, base_y, optimize)
+
+    for uav in uavs:
+        if uav.active:
+            uav.assigned_tasks = planned_routes.get(uav.uav_id, uav.assigned_tasks)
+            for task in uav.assigned_tasks:
+                task.assigned_uav = uav
+            _recompute_uav_resources(uav)
 
     for task in new_tasks:
-        uav = assignment.get(task.task_id)
-        if uav is not None:
-            uav.assigned_tasks.append(task)
-            task.assigned_uav = uav
-            _recompute_uav_resources(uav)
+        if assignment.get(task.task_id) is None:
+            task.assigned_uav = None
 
     if optimize:
         uavs = redistribute_load(uavs, base_x, base_y)
@@ -525,14 +607,18 @@ def reassign_after_location_update(updated_tasks, uavs,
             old_uav.assigned_tasks.remove(task)
             _recompute_uav_resources(old_uav)
 
-    assignment = som_assign(updated_tasks, uavs, base_x, base_y, optimize)
+    assignment, planned_routes = som_assign(updated_tasks, uavs, base_x, base_y, optimize)
+
+    for uav in uavs:
+        if uav.active:
+            uav.assigned_tasks = planned_routes.get(uav.uav_id, uav.assigned_tasks)
+            for task in uav.assigned_tasks:
+                task.assigned_uav = uav
+            _recompute_uav_resources(uav)
 
     for task in updated_tasks:
-        uav = assignment.get(task.task_id)
-        if uav is not None:
-            uav.assigned_tasks.append(task)
-            task.assigned_uav = uav
-            _recompute_uav_resources(uav)
+        if assignment.get(task.task_id) is None:
+            task.assigned_uav = None
 
     if optimize:
         uavs = redistribute_load(uavs, base_x, base_y)
@@ -554,16 +640,20 @@ def reassign_after_uav_failure(failed_uav, uavs,
         return uavs
 
     active_uavs = [u for u in uavs if u.active]
-    assignment  = som_assign(orphaned, active_uavs, base_x, base_y, optimize)
+    assignment, planned_routes = som_assign(orphaned, active_uavs, base_x, base_y, optimize)
 
     redistributed = 0
-    for task in orphaned:
-        uav = assignment.get(task.task_id)
-        if uav is not None:
-            uav.assigned_tasks.append(task)
+    for uav in active_uavs:
+        uav.assigned_tasks = planned_routes.get(uav.uav_id, uav.assigned_tasks)
+        for task in uav.assigned_tasks:
             task.assigned_uav = uav
+        _recompute_uav_resources(uav)
+
+    for task in orphaned:
+        if assignment.get(task.task_id) is None:
+            task.assigned_uav = None
+        else:
             redistributed += 1
-            _recompute_uav_resources(uav)
 
     if optimize:
         uavs = redistribute_load(uavs, base_x, base_y)

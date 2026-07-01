@@ -19,7 +19,7 @@ if ROOT_DIR not in sys.path:
 
 import math
 
-from common.config import UAV_SPEED
+from common.config import UAV_SPEED, ENERGY_PER_METER
 
 
 # ----------------------------------------------------------
@@ -169,9 +169,23 @@ def estimate_route_usage(uav, route, uav_speed, energy_per_meter):
     return total_energy, total_hover, total_compute
 
 
+def route_resource_feasible(uav, route, tol=1e-9):
+    """True when a route respects energy, flight-time, and compute budgets."""
+    energy, hover, compute = estimate_route_usage(
+        uav,
+        route,
+        UAV_SPEED,
+        ENERGY_PER_METER,
+    )
+    return (
+        energy <= uav.max_energy + tol
+        and hover <= uav.max_hover_time + tol
+        and compute <= uav.max_compute + tol
+    )
+
+
 def recompute_route_resources(uav, route=None):
-    """Reset residual UAV resources from the current TSA route order."""
-    from config import UAV_SPEED, ENERGY_PER_METER
+    """Reset residual UAV resources from the current route order."""
 
     route = uav.assigned_tasks if route is None else route
     energy, hover, compute = estimate_route_usage(
@@ -186,28 +200,53 @@ def recompute_route_resources(uav, route=None):
     return energy, hover, compute
 
 
+def update_execution_status(uavs, all_tasks):
+    """
+    Populate task finish/completion fields from the final route order and
+    recompute UAV residual resources from full mission capacity.
+    """
+    for task in all_tasks:
+        task.start_time = None
+        task.finish_time = None
+        task.completed = False
+
+    usage = {}
+    for uav in uavs:
+        energy, hover, compute = recompute_route_resources(uav)
+        usage[uav.uav_id] = (energy, hover, compute)
+
+        current_x = uav.x
+        current_y = uav.y
+        clock = 0.0
+        for task in uav.assigned_tasks:
+            travel = euclidean_distance(current_x, current_y, task.x, task.y)
+            task.start_time = clock + travel / UAV_SPEED
+            task.finish_time = task.start_time + task.hover_time
+            task.completed = (
+                uav.active
+                and task.finish_time <= task.deadline
+                and energy <= uav.max_energy + 1e-9
+                and hover <= uav.max_hover_time + 1e-9
+                and compute <= uav.max_compute + 1e-9
+            )
+            current_x = task.x
+            current_y = task.y
+            clock = task.finish_time
+
+    return usage
+
+
 # ----------------------------------------------------------
 # MISSION METRICS
 # ----------------------------------------------------------
 
 def completion_rate(uavs, all_tasks):
     """
-    Fraction of tasks completed on time.
-    Uses estimate_finish_time for each UAV's route.
+    Fraction of tasks completed on time by an active, resource-feasible UAV.
     """
 
     total     = len(all_tasks)
-    completed = 0
-
-    for uav in uavs:
-        if not uav.assigned_tasks:
-            continue
-        timeline = estimate_finish_time(
-            uav, uav.assigned_tasks, UAV_SPEED
-        )
-        for task, ft in timeline:
-            if check_deadline(task, ft):
-                completed += 1
+    completed = sum(1 for task in all_tasks if task.completed)
 
     return completed / total if total > 0 else 0.0
 
@@ -223,14 +262,10 @@ def high_priority_completion_rate(uavs,tasks):
             continue
         hi_total += 1
 
-    for uav in uavs:
-
-        timeline = estimate_finish_time(
-            uav, uav.assigned_tasks, UAV_SPEED
-        )
-        for task, ft in timeline:
-            if task.priority == 1 and check_deadline(task, ft):
-                hi_completed += 1
+    hi_completed = sum(
+        1 for task in tasks
+        if task.priority == 1 and task.completed
+    )
 
     return hi_completed / hi_total if hi_total > 0 else 0.0
 
